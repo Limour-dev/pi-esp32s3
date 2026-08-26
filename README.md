@@ -43,6 +43,28 @@ cd ~/mpy-esp32s3
 python3 -m esptool --port /dev/ttyACM0 --baud 460800 write-flash -z 0x0 fw.bin
 ```
 
+## 离开 / 断电前检查（拔线备忘）
+
+**直接拔掉 USB 即可，无强制步骤**，但建议按下面顺序快速确认，避免端口被占或残留进程：
+
+```bash
+# 1. 确认无进程占用串口（无输出即安全，可拔）
+fuser -v /dev/ttyACM0
+
+# 2. 确认无后台串口监听脚本残留（调试时用过的 pyserial 脚本等）
+pgrep -af "python3 _listen[.]py"
+
+# 3. 确认 git 工作区干净（可选）
+git status
+```
+
+拔线后须知：
+
+- 代码已存在板子 Flash 里（`boot.py` / `config.py` / `main.py`），**上电自动运行 `main.py`**；
+  若不想自启，插回后执行 `python3 -m mpremote connect <PORT> mv main.py <其他名字>` 改名即可。
+- 重新插入后 **VMware USB 直通要重连**（虚拟机 → 可移动设备 → 连接），见 SETUP_GUIDE 第 1 节。
+- 串口节点号会变（`ttyACM0` → `ttyACM1`…），始终用 by-id 定位：`ls -l /dev/serial/by-id/`。
+
 ## 目录结构
 
 ```
