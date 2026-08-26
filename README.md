@@ -47,7 +47,12 @@ python3 -m esptool --port /dev/ttyACM0 --baud 460800 write-flash -z 0x0 fw.bin
 
 ```
 pi-esp32s3/
-├── README.md          # 本文件（项目说明 + 快速开始）
-├── SETUP_GUIDE.md     # 环境搭建指导手册（供新 agent / 小白使用）
-└── (待添加) main.py   # MicroPython 主程序
+├── README.md                  # 项目说明 + 快速开始
+├── SETUP_GUIDE.md             # 环境搭建指导手册（供新 agent / 小白使用）
+└── examples/
+    └── 01-led-blink/          # 例程 1：点灯（测试所有 LED + WS2812）
+        ├── AGENT_GUIDE.md     # 给 agent 的指导
+        ├── config.py          # LED 引脚配置（探测后填写）
+        ├── scan_leds.py       # LED 引脚自动探测脚本
+        └── main.py            # 点灯主程序
 ```
