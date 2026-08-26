@@ -55,4 +55,8 @@ pi-esp32s3/
         ├── config.py          # LED 引脚配置（探测后填写）
         ├── scan_leds.py       # LED 引脚自动探测脚本
         └── main.py            # 点灯主程序
+    └── 02-ap-file-server/     # 例程 2：WiFi 热点 + 文件浏览服务器 + LED 控制
+        ├── AGENT_GUIDE.md     # 给 agent 的指导
+        ├── config.py          # 热点名/密码/端口/WS2812 引脚配置
+        └── main.py            # AP + HTTP 文件服务器 + /setled LED 控制
 ```
