@@ -83,7 +83,8 @@ VM 无蓝牙适配器，无法真机连 BLE。方案：**Node + vm 模块模拟 
 ### 3.8 给蓝牙加密码：应用层 AUTH 认证
 
 **动机**：BLE 广播范围内任何人都能扫到 `ESP32S3-FS` 并连上，文件（含上传/删除）和 LED 完全裸奔。
-MicroPython 的 BLE 栈不带 SMP 配对（无法走系统级 PIN 配对/加密），所以做**应用层认证**。
+MicroPython ESP32（NimBLE）API 层其实带 SMP 配对接口（`config(io/mitm/le_secure/bond)`、`gap_pair`/`gap_passkey`、`_IRQ_PASSKEY_ACTION` 等，官方文档注明仅 NimBLE 栈支持；但社区实测 ESP32 上配对/绑定并不工作，micropython#12958），
+且本项目客户端是 Web Bluetooth 网页——该规范不允许网页输入 PIN/参与配对流程，系统级配对/重连加密对网页客户端不可达，所以做**应用层认证**。
 
 - **协议**：新增 `AUTH <password>` 命令。连接后除 `AUTH` 外所有命令先过门禁，未认证一律回 `ERR auth required`；
   LED 写特征（IRQ 路径）同样被忽略。密码存 `config.py` 的 `BLE_PASSWORD`（默认 `1234`）。
@@ -100,12 +101,23 @@ MicroPython 的 BLE 栈不带 SMP 配对（无法走系统级 PIN 配对/加密�
 - 连带修复一个网页 bug：原 `onDisconnected()` 把挂起的 `req` 直接置 null 不 reject——设备在请求进行中断开时
   Promise 永不 settle，`gattConnect` 卡死（连错密码触发服务器断开后必现）。现在断开时 reject 挂起请求。
 - **局限**：BLE 无配对时通道不加密，密码明文过空口，防不了嗅探重放；这层认证只防误连/普通围观，
-  真需要安全得上 SMP 配对或传输层加密（超出本例）。
+  真需要安全：换原生 BLE 客户端（nRF Connect/自写 App）配合板端 SMP 配对+绑定，或上 ESP-IDF 原生栈（超出本例）。
+
+### 3.9 多客户端行为：两台手机同时开网页 UI 会怎样
+
+板子是**单连接外设**：`main.py` 里 `connected`/`conn_id`/`authed` 都是全局单例，连上即 `gap_advertise(None)` 停广播、断开才恢复广播。所以「两台同时在线」不会发生，第二台的表现取决于时序：
+
+- **A 已连上并输对密码，B 此时点连接**：板子已停止广播，B 的 `requestDevice()` 选择器里扫不到 `ESP32S3-FS`，一直停在空列表只能取消——连输密码的机会都没有。
+- **两台几乎同时发起连接**（都赶在广播窗口内）：只有一台抢到唯一连接，另一台 `gatt.connect()` 抛 `NetworkError: GATT operation failed`，页面日志红字「连接失败」，无密码环节。
+- **A 断开后 B 再连**：板子恢复广播，B 正常连上，但必须**自己重新输密码**（每次 `IRQ_CENTRAL_CONNECT` 都重置 `authed=False`），A 的会话状态不残留、不共享。
+
+结论：单连接 + 连上即停广播 + 每连接独立认证 ⇒ 不存在「蹭别人会话」的可能，应用层 AUTH 在此架构下没有多客户端并发会话可泄露。若真想支持两台同时在线，需把 `main.py` 重构成多连接模型（NimBLE 栈编译支持 4 连接，但全局状态要改成 per-conn dict、notify 按各自 `conn_id` 发、连接期间继续广播），当前无此必要。
 
 ## 4. 最终结论
 
 - BLE 广播：**ESP32S3-FS**，服务 `led=16 cmd=19 data=21`；连接/断开状态灯：暗绿=广播，蓝=已连接，用户色=LED 指令，断开恢复暗绿。
 - 密码保护：应用层 `AUTH` 认证，密码存 `config.py` 的 `BLE_PASSWORD`；未认证任何命令回 `ERR auth required`，LED 写也被忽略；连续错 3 次自动断开。
+- 单连接外设：连上即停广播，期间其他设备搜不到/连不上；断开恢复广播，新连接必须重新输密码（认证状态按连接重置，会话互不共享，见 3.9）。
 - 文件服务：列表/查看/下载/删除/上传全通，60KB 二进制往返字节级一致；上传上限默认 512KB。
 - 网页端：单文件零依赖，HTTPS 托管即用；连接后弹密码框（默认 `1234`）；Chrome/Edge（桌面+Android）可用，iOS Safari 不支持。
 - 板子文件：`boot.py`（看门狗）+ `config.py` + `main.py`，上电自启。
@@ -122,4 +134,4 @@ MicroPython 的 BLE 栈不带 SMP 配对（无法走系统级 PIN 配对/加密�
 7. **分两次 `gatts_register_services` 句柄冲突**：必须一次注册全部服务，返回值是嵌套元组 `((led,), (cmd, data))`。
 8. **网页 request/response 引擎按 `DONE` 收尾判定**：单行回复后面必须补 `DONE`；`writeValue` 同步异常要 try/catch 并清理请求状态，否则永久「已有请求进行中」。
 9. **断开时挂起的请求必须 reject**：`onDisconnected()` 把 `req` 置 null 却不 reject，Promise 永不 settle → `await` 永远挂起、页面卡死。加密码后这条必现（连错 3 次服务器主动断开），顺手修掉：断开时 `r.reject(new Error('设备已断开连接'))`。
-10. **BLE 加密码只能做应用层**：MicroPython BLE 栈无 SMP 配对，GATT 通道不加密，`AUTH` 密码明文过空口。防误连/防普通围观够用，防嗅探重放不够；别在文档里吹成安全方案。
+10. **BLE 加密码只能做应用层（对网页客户端而言）**：MicroPython ESP32 的 NimBLE API 层带 SMP 配对接口，但 ESP32 上实际不工作（micropython#12958），且 Web Bluetooth 规范不允许网页输 PIN/控制绑定，系统级配对/重连加密对网页客户端不可达；GATT 通道不加密，`AUTH` 密码明文过空口。防误连/防普通围观够用，防嗅探重放不够；别在文档里吹成安全方案。
