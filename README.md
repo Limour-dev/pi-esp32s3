@@ -81,4 +81,7 @@ pi-esp32s3/
         ├── AGENT_GUIDE.md     # 给 agent 的指导
         ├── config.py          # 热点名/密码/端口/WS2812 引脚配置
         └── main.py            # AP + HTTP 文件服务器 + /setled LED 控制
+    └── 03-ble-file-led/       # 例程 3：BLE 网页控制台（文件 + LED）
+    └── 04-wifi-ble-console/   # 例程 4：BLE 网页控制台 + WiFi 配置（含回退热点 AP）
+    └── 05-mqtt-ws2812/        # 例程 5：BLE 网页控制台 + WiFi + MQTT（TLS 8883 控制 WS2812，无 AP）
 ```
