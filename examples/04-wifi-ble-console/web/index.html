@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32-S3 BLE 控制台（文件 / LED / WiFi）</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #263449; --border: #334155;
+    --fg: #e2e8f0; --dim: #94a3b8; --acc: #38bdf8; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         padding: 16px; max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 1.25rem; margin: 4px 0 12px; }
+  h2 { font-size: 1rem; margin: 20px 0 8px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+  button { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 8px 14px;
+           font-size: .9rem; cursor: pointer; }
+  button:hover { filter: brightness(1.15); }
+  button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--fg); }
+  button.danger { background: #b91c1c; }
+  button.small { padding: 4px 10px; font-size: .8rem; }
+  input[type=color] { width: 64px; height: 40px; border: none; background: none; padding: 0; cursor: pointer; }
+  input[type=text], input[type=password] { width: 100%; padding: 9px 11px; margin: 4px 0;
+         background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
+         border-radius: 6px; font-size: .95rem; }
+  input:focus { outline: none; border-color: var(--acc); }
+  #status { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--dim); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #64748b; display: inline-block; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.ble { background: var(--acc); box-shadow: 0 0 8px var(--acc); }
+  .banner { background: #7f1d1d; border: 1px solid #b91c1c; color: #fecaca; padding: 10px 12px;
+            border-radius: 8px; margin-bottom: 14px; font-size: .9rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--dim); font-weight: 600; }
+  td.name { word-break: break-all; }
+  td.size { color: var(--dim); white-space: nowrap; text-align: right; }
+  td.ops { white-space: nowrap; text-align: right; }
+  .empty { color: var(--dim); text-align: center; padding: 20px; }
+  #log { background: #0b1120; border: 1px solid var(--border); border-radius: 8px;
+         height: 150px; overflow-y: auto; padding: 8px 10px; font-family: ui-monospace, Menlo, Consolas, monospace;
+         font-size: .78rem; white-space: pre-wrap; word-break: break-all; }
+  #log .err { color: var(--err); } #log .ok { color: var(--ok); } #log .sys { color: var(--dim); }
+  .modal { position: fixed; inset: 0; background: rgba(2,6,23,.8); display: none; align-items: center; justify-content: center; z-index: 10; }
+  .modal.show { display: flex; }
+  .modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+               width: min(92vw, 720px); max-height: 86vh; display: flex; flex-direction: column; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .modal-body { overflow: auto; padding: 14px; font-family: ui-monospace, Menlo, Consolas, monospace;
+                font-size: .82rem; white-space: pre-wrap; word-break: break-all; margin: 0; flex: 1; }
+  .hint { color: var(--dim); font-size: .82rem; line-height: 1.6; }
+  .hint code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+  .swatches button { width: 34px; height: 34px; border-radius: 6px; padding: 0; border: 2px solid transparent; }
+  .swatches button.active { border-color: #fff; }
+  .preset-label { font-size: .78rem; color: var(--dim); }
+  progress { width: 100%; height: 6px; border: none; border-radius: 3px; }
+  progress::-webkit-progress-bar { background: var(--panel2); border-radius: 3px; }
+  progress::-webkit-progress-value { background: var(--acc); border-radius: 3px; }
+  /* WiFi 面板 */
+  #wifiStatus { background: #0b1120; border: 1px solid var(--border); border-radius: 8px;
+                padding: 8px 10px; font-family: ui-monospace, Menlo, Consolas, monospace;
+                font-size: .8rem; white-space: pre-wrap; word-break: break-all; margin: 6px 0; }
+  #wifiList { list-style: none; padding: 0; margin: 6px 0; }
+  #wifiList li { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                 padding: 8px 10px; background: var(--panel2); border: 1px solid var(--border);
+                 border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
+  #wifiList li:hover { border-color: var(--acc); }
+  #wifiList .ssid { flex: 1; word-break: break-all; }
+  #wifiList .meta { color: var(--dim); font-size: .78rem; white-space: nowrap; text-align: right; }
+  .sig0 { color: var(--err); } .sig1 { color: var(--warn); } .sig2 { color: var(--ok); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>&#128225; ESP32-S3 BLE 控制台 <span id="status"><span class="dot" id="dot"></span><span id="statusText">未连接</span></span></h1>
+
+<div id="noBle" class="banner" style="display:none">
+  &#9888; 当前浏览器不支持 Web Bluetooth。请使用 <b>Chrome / Edge</b>（桌面版或 Android），
+  并且页面必须通过 <b>HTTPS</b> 访问（或 localhost）。iOS Safari 不支持 Web Bluetooth。
+</div>
+
+<div class="card">
+  <div class="row">
+    <button id="btnConnect" onclick="doConnect()">&#128279; 连接设备</button>
+    <button id="btnDisconnect" class="ghost" disabled onclick="doDisconnect()">断开</button>
+    <span class="hint">搜索设备名前缀 <code>ESP32S3</code>（默认 <code>ESP32S3-WIFI</code>）；连接后需输入密码（板端 <code>config.py</code> 的 <code>BLE_PASSWORD</code>）</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>&#128225; WiFi 路由器（扫描 / 连接 / 状态）</h2>
+  <div class="row">
+    <button id="btnScan" disabled onclick="scanWifi()">&#128269; 扫描路由器</button>
+    <button id="btnWifiStatus" class="ghost" disabled onclick="refreshWifiStatus()">刷新状态</button>
+    <span class="hint">点击扫描结果可直接填入 SSID；连接成功会保存到板子，上电自动重连</span>
+  </div>
+  <div id="wifiStatus">&mdash; 点击「刷新状态」查看当前 STA/热点 情况 &mdash;</div>
+  <ul id="wifiList"></ul>
+  <div id="wifiEmpty" class="empty" style="display:none">点击「扫描路由器」查看附近的 WiFi</div>
+  <div class="grid2">
+    <div>
+      <div class="preset-label">连接路由器</div>
+      <input type="text" id="wifiSsid" placeholder="SSID（路由器名称）" autocomplete="off">
+      <input type="password" id="wifiPwd" placeholder="密码（开放网络留空）" autocomplete="off">
+      <div class="row">
+        <button id="btnWifiConnect" disabled onclick="connectWifi()">&#128279; 连接</button>
+        <button id="btnWifiDisconnect" class="ghost" disabled onclick="disconnectWifi()">断开（保留配置）</button>
+        <button id="btnWifiForget" class="ghost danger" disabled onclick="forgetWifi()">忘记配置</button>
+      </div>
+    </div>
+    <div>
+      <div class="preset-label">回退热点（配置入口，永远开着，不转发网络）</div>
+      <input type="text" id="apSsid" placeholder="热点名称（默认 ESP32S3-AP）" autocomplete="off">
+      <input type="password" id="apPwd" placeholder="热点密码（至少 8 位，留空=开放）" autocomplete="off">
+      <div class="row">
+        <button id="btnApApply" class="ghost" disabled onclick="applyAp()">应用热点设置</button>
+      </div>
+      <p class="hint">&#9888; 本固件无 NAT，热点下的设备<b>不能</b>通过 ESP32 上网，只能访问 ESP32 自身服务；热点用于连不上路由器时兜底。</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>&#128193; 文件（ESP32 Flash / 根目录）</h2>
+  <div class="row">
+    <button id="btnList" disabled onclick="refreshList()">&#128260; 刷新列表</button>
+    <button id="btnUpload" class="ghost" disabled onclick="document.getElementById('fileInput').click()">&#128229; 上传文件到板子</button>
+    <input type="file" id="fileInput" style="display:none" onchange="uploadSelected(this)">
+  </div>
+  <table id="fileTable">
+    <thead><tr><th>名称</th><th style="width:80px;text-align:right">大小</th><th style="width:170px;text-align:right">操作</th></tr></thead>
+    <tbody id="fileBody"></tbody>
+  </table>
+  <div id="fileEmpty" class="empty">点击「刷新列表」查看板子上的文件</div>
+  <progress id="uploadProg" max="100" value="0" style="display:none"></progress>
+</div>
+
+<div class="card">
+  <h2>&#127912; WS2812 灯珠颜色</h2>
+  <div class="row">
+    <input type="color" id="picker" value="#ff0040">
+    <button onclick="sendPicker()">设置颜色</button>
+    <button class="ghost" onclick="setHex('#000000')">熄灭</button>
+  </div>
+  <div class="row swatches" id="swatches"></div>
+  <p class="hint">状态色：蓝 = BLE 已连接；橙 = 正在连路由器；青 = 路由器已连接；暗绿 = 广播中/回退热点。</p>
+</div>
+
+<div class="card">
+  <h2>&#128221; 日志</h2>
+  <div id="log"></div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <strong id="modalTitle">文件内容</strong>
+      <span>
+        <button class="small ghost" id="btnCopy" onclick="copyContent()">复制</button>
+        <button class="small ghost" id="btnDownload" onclick="downloadContent()">下载</button>
+        <button class="small danger" onclick="closeModal()">关闭</button>
+      </span>
+    </div>
+    <pre class="modal-body" id="modalBody"></pre>
+  </div>
+</div>
+
+<div class="modal" id="authModal">
+  <div class="modal-box" style="width:min(92vw,380px)">
+    <div class="modal-head"><strong>&#128273; 输入连接密码</strong></div>
+    <div class="modal-body" style="font-family:inherit; white-space:normal">
+      <p class="hint">此设备已开启密码保护。请输入密码
+        （默认见板端 <code>config.py</code> 的 <code>BLE_PASSWORD</code>），
+        连续输错 3 次会被设备断开。</p>
+      <input type="password" id="authPwd" placeholder="密码" autocomplete="off">
+      <div class="row" style="justify-content:flex-end; margin-top:10px">
+        <button class="small ghost" onclick="closeAuthModal()">取消</button>
+        <button class="small" onclick="submitAuth()">确认</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ========== 与 ESP32 config.py 保持一致 ========== */
+const NAME_PREFIX  = 'ESP32S3';                       // 设备名前缀
+const LED_SVC  = '0000fff0-0000-1000-8000-00805f9b34fb';
+const LED_CHAR = '0000fff1-0000-1000-8000-00805f9b34fb';
+const FILE_SVC = '0000ffe0-0000-1000-8000-00805f9b34fb';
+const CMD_CHAR = '0000ffe1-0000-1000-8000-00805f9b34fb';
+const DATA_CHAR= '0000ffe2-0000-1000-8000-00805f9b34fb';
+const LINE_MAX = 180;               // config.CHUNK_SIZE
+const WRITE_CHUNK_B64 = 168;        // 4 的倍数：180 - len('WRITE_CHUNK ')
+/* ================================================ */
+
+const enc = s => new TextEncoder().encode(s);
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+
+let device = null, server = null, ledChar = null, cmdChar = null, dataChar = null;
+let req = null;          // 进行中的请求 {onLine, resolve, reject, timer}
+let lineBuf = '';        // 通知行缓冲（按 \n 切分）
+let busy = false;
+
+/* ---------- 日志 ---------- */
+function log(msg, cls) {
+  const t = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.textContent = '[' + t + '] ' + msg;
+  if (cls) div.className = cls;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setBusy(v) {
+  busy = v;
+  ['btnList', 'btnUpload', 'btnDisconnect', 'btnScan', 'btnWifiStatus',
+   'btnWifiConnect', 'btnWifiDisconnect', 'btnWifiForget', 'btnApApply'].forEach(id => $(id).disabled = !device || v);
+  $('btnConnect').disabled = v;
+}
+
+/* ---------- 连接管理 ---------- */
+function setStatus(text, cls) {
+  $('statusText').textContent = text;
+  $('dot').className = 'dot' + (cls ? ' ' + cls : '');
+}
+
+if (!navigator.bluetooth) {
+  $('noBle').style.display = 'block';
+  $('btnConnect').disabled = true;
+}
+
+async function doConnect() {
+  try {
+    const opts = {
+      filters: [{ namePrefix: NAME_PREFIX }],
+      optionalServices: [LED_SVC, FILE_SVC],
+    };
+    log('请求选择设备（搜索前缀 ' + NAME_PREFIX + '）…');
+    device = await navigator.bluetooth.requestDevice(opts);
+    log('已选择设备: ' + (device.name || '未知'));
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    await gattConnect();
+  } catch (e) {
+    if (e.name === 'NotFoundError') log('未找到设备，请确认板子已上电并正在广播', 'err');
+    else log('连接失败: ' + e.message, 'err');
+    if (device && device.gatt && device.gatt.connected) { try { await device.gatt.disconnect(); } catch (e2) {} }
+    device = null; server = null; ledChar = cmdChar = dataChar = null;
+    setBusy(false);
+    setStatus('未连接', '');
+  }
+}
+
+async function gattConnect() {
+  setBusy(true);
+  log('正在连接 GATT…');
+  server = await device.gatt.connect();
+  setStatus('已连接: ' + (device.name || ''), 'on');
+
+  const ledSvc  = await server.getPrimaryService(LED_SVC);
+  ledChar  = await ledSvc.getCharacteristic(LED_CHAR);
+  const fileSvc = await server.getPrimaryService(FILE_SVC);
+  cmdChar  = await fileSvc.getCharacteristic(CMD_CHAR);
+  dataChar = await fileSvc.getCharacteristic(DATA_CHAR);
+
+  await dataChar.startNotifications();
+  dataChar.addEventListener('characteristicvaluechanged', onData);
+  log('GATT 服务就绪（文件 / LED / WiFi）', 'ok');
+  // 密码认证：通过才继续，失败/取消则断开
+  if (!(await doAuth())) {
+    try { device.gatt.disconnect(); } catch (e) {}
+    return;
+  }
+  $('btnDisconnect').disabled = false;
+  await ping();
+  await refreshList();
+  await refreshWifiStatus();
+  setBusy(false);
+}
+
+function onDisconnected() {
+  log('设备已断开连接', 'err');
+  setStatus('已断开', '');
+  if (req) { const r = req; req = null; clearTimeout(r.timer); r.reject(new Error('设备已断开连接')); }
+  device = null; server = null; ledChar = cmdChar = dataChar = null;
+  setBusy(false);
+  $('fileBody').innerHTML = '';
+  $('fileEmpty').style.display = 'block';
+  $('wifiList').innerHTML = '';
+  $('wifiEmpty').style.display = 'block';
+  $('wifiStatus').textContent = '— 已断开 —';
+}
+
+async function doDisconnect() {
+  if (device && device.gatt.connected) {
+    try { await device.gatt.disconnect(); } catch (e) { /* ignore */ }
+  }
+  onDisconnected();
+}
+
+/* ---------- 密码认证 ---------- */
+let authResolve = null;
+
+function openAuthPrompt() {
+  return new Promise(resolve => {
+    authResolve = resolve;
+    $('authPwd').value = '';
+    $('authModal').classList.add('show');
+    setTimeout(() => $('authPwd').focus(), 60);
+  });
+}
+
+function closeAuthModal() {
+  $('authModal').classList.remove('show');
+  if (authResolve) { const r = authResolve; authResolve = null; r(null); }
+}
+
+function submitAuth() {
+  const v = $('authPwd').value;
+  $('authModal').classList.remove('show');
+  if (authResolve) { const r = authResolve; authResolve = null; r(v); }
+}
+
+async function doAuth() {
+  for (let tries = 1; tries <= 3; tries++) {
+    const pwd = await openAuthPrompt();
+    if (pwd === null) { log('已取消连接（未输入密码）', 'sys'); return false; }
+    try {
+      await request('AUTH ' + pwd, () => {}, 5000);
+      log('密码验证通过，会话已解锁', 'ok');
+      return true;
+    } catch (e) {
+      log('认证失败（第 ' + tries + ' 次）: ' + e.message, 'err');
+    }
+  }
+  return false;
+}
+
+// 密码框回车提交
+$('authPwd').addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
+
+/* ---------- 通知 → 行协议 ---------- */
+function onData(ev) {
+  lineBuf += new TextDecoder().decode(ev.target.value);
+  let i;
+  while ((i = lineBuf.indexOf('\n')) >= 0) {
+    const line = lineBuf.slice(0, i).replace(/\r$/, '');
+    lineBuf = lineBuf.slice(i + 1);
+    if (line) handleLine(line);
+  }
+}
+
+function handleLine(line) {
+  if (!req) { log('未期待的响应: ' + line, 'sys'); return; }
+  if (line === 'DONE') {
+    const r = req; req = null; clearTimeout(r.timer); r.resolve(r.acc);
+  } else if (line.startsWith('ERR ')) {
+    const r = req; req = null; clearTimeout(r.timer); r.reject(new Error(line.slice(4)));
+  } else {
+    req.onLine(line);
+  }
+}
+
+function request(cmdLine, onLine, timeout = 15000) {
+  return new Promise((resolve, reject) => {
+    if (req) { reject(new Error('已有请求进行中')); return; }
+    if (!cmdChar) { reject(new Error('未连接')); return; }
+    req = { onLine, acc: null, resolve, reject,
+            timer: setTimeout(() => { req = null; reject(new Error('响应超时: ' + cmdLine)); }, timeout) };
+    let p;
+    try { p = cmdChar.writeValue(enc(cmdLine + '\n')); }
+    catch (e) { const r = req; req = null; clearTimeout(r.timer); reject(e); return; }
+    p.catch(e => { const r = req; req = null; clearTimeout(r.timer); reject(e); });
+  });
+}
+
+/* ---------- 命令 ---------- */
+async function ping() {
+  try {
+    await request('PING', l => log('PING -> ' + l, 'ok'), 5000);
+  } catch (e) { log('PING 失败: ' + e.message, 'err'); }
+}
+
+/* ================= WiFi 面板 ================= */
+const AUTH_LABEL = {0:'开放',1:'WEP',2:'WPA',3:'WPA2',4:'WPA/WPA2',5:'WPA2企业',
+                    6:'WPA3',7:'WPA2/WPA3',8:'WAPI',9:'OWE'};
+const b64utf8 = s => {
+  const b = new TextEncoder().encode(s);
+  let bin = '';
+  b.forEach(x => bin += String.fromCharCode(x));
+  return btoa(bin);
+};
+const utf8from64 = b64 => {
+  try {
+    const bin = atob(b64 || '');
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (e) { return ''; }
+};
+const sigClass = rssi => rssi >= -60 ? 'sig2' : (rssi >= -75 ? 'sig1' : 'sig0');
+const sigBars = rssi => rssi >= -60 ? '▂▄▆█' : (rssi >= -75 ? '▂▄▆_' : '▂▄__');
+
+async function scanWifi() {
+  setBusy(true);
+  $('wifiList').innerHTML = '';
+  const items = [];
+  try {
+    log('正在扫描周围路由器…（约 2-3 秒）');
+    await request('WIFI_SCAN', line => {
+      if (line.startsWith('N ')) {
+        const [a, ch, rssi, b64ssid] = line.slice(2).split(' ');
+        const ssid = utf8from64(b64ssid) || '(隐藏网络)';
+        items.push({ ssid, auth: +a, channel: +ch, rssi: +rssi });
+      }
+    }, 15000);
+    renderWifiList(items);
+    log('扫描完成: ' + items.length + ' 个路由器', 'ok');
+  } catch (e) {
+    log('扫描失败: ' + e.message, 'err');
+  } finally { setBusy(false); }
+}
+
+function renderWifiList(items) {
+  const ul = $('wifiList');
+  ul.innerHTML = '';
+  $('wifiEmpty').style.display = items.length ? 'none' : 'block';
+  const bySsid = new Map();
+  for (const it of items) {   // 同 SSID 取信号最强
+    const old = bySsid.get(it.ssid);
+    if (!old || it.rssi > old.rssi) bySsid.set(it.ssid, it);
+  }
+  const uniq = [...bySsid.values()].sort((a, b) => b.rssi - a.rssi);
+  for (const it of uniq) {
+    const li = document.createElement('li');
+    const name = document.createElement('span'); name.className = 'ssid'; name.textContent = it.ssid;
+    const meta = document.createElement('span'); meta.className = 'meta';
+    meta.innerHTML = '<span class="' + sigClass(it.rssi) + '">' + sigBars(it.rssi) + '</span> ' +
+                     it.rssi + ' dBm · ' + (AUTH_LABEL[it.auth] || '?') + ' · CH ' + it.channel;
+    li.append(name, meta);
+    li.title = '点击填入 SSID';
+    li.onclick = () => { $('wifiSsid').value = it.ssid; log('已填入 SSID: ' + it.ssid, 'sys'); };
+    ul.appendChild(li);
+  }
+}
+
+async function connectWifi() {
+  const ssid = $('wifiSsid').value.trim();
+  const pwd = $('wifiPwd').value;
+  if (!ssid) { log('请先填写路由器 SSID（或点击扫描结果）', 'err'); return; }
+  setBusy(true);
+  try {
+    log('连接路由器 ' + ssid + ' …（最多 20 秒）');
+    let lastProg = 0;
+    await request('WIFI_CONNECT ' + b64utf8(ssid) + ' ' + b64utf8(pwd), line => {
+      if (line.startsWith('C ')) {
+        const sec = +line.slice(2);
+        if (sec !== lastProg) { lastProg = sec; log('  连接中 ' + sec + ' 秒…', 'sys'); }
+      } else if (line.startsWith('WIFI connecting ')) {
+        log('板端开始连接: ' + line.slice(16), 'sys');
+      } else if (line.startsWith('WIFI OK ')) {
+        log('已连接路由器，IP: ' + line.slice(8), 'ok');
+      }
+    }, 30000);
+    log('路由器配置已保存，上电自动重连', 'ok');
+    await refreshWifiStatus();
+  } catch (e) {
+    log('连接失败: ' + e.message, 'err');
+  } finally { setBusy(false); }
+}
+
+async function disconnectWifi() {
+  setBusy(true);
+  try {
+    await request('WIFI_DISCONNECT', () => {}, 8000);
+    log('已断开（配置保留，下次上电/重试会自动重连）', 'ok');
+    await refreshWifiStatus();
+  } catch (e) { log('断开失败: ' + e.message, 'err'); }
+  finally { setBusy(false); }
+}
+
+async function forgetWifi() {
+  if (!confirm('删除保存的路由器配置并断开连接？')) return;
+  setBusy(true);
+  try {
+    await request('WIFI_FORGET', () => {}, 8000);
+    log('已忘记路由器配置', 'ok');
+    await refreshWifiStatus();
+  } catch (e) { log('操作失败: ' + e.message, 'err'); }
+  finally { setBusy(false); }
+}
+
+async function applyAp() {
+  const ssid = $('apSsid').value.trim();
+  const pwd = $('apPwd').value;
+  if (!ssid) { log('请填写热点名称', 'err'); return; }
+  setBusy(true);
+  try {
+    await request('WIFI_AP ' + b64utf8(ssid) + ' ' + b64utf8(pwd), () => {}, 8000);
+    log('热点已重配为 ' + ssid + '（立即生效）', 'ok');
+    await refreshWifiStatus();
+  } catch (e) { log('热点设置失败: ' + e.message, 'err'); }
+  finally { setBusy(false); }
+}
+
+async function refreshWifiStatus() {
+  if (!device) return;
+  setBusy(true);
+  const rows = [];
+  try {
+    await request('WIFI_STATUS', line => rows.push(line), 8000);
+    let sta = '—', ap = '—', saved = '—';
+    for (const line of rows) {
+      if (line.startsWith('STA ')) {
+        const [, state, b64ssid, ip, gw] = line.split(' ');
+        const ssid = utf8from64(b64ssid) || '';
+        sta = state === 'CONNECTED'
+          ? '已连接 ' + (ssid || '?') + '   IP ' + ip + '  网关 ' + gw
+          : (state === 'OFF' ? '未启用' : (state === 'CONNECTING' ? '连接中…' : '未连接'));
+      } else if (line.startsWith('AP ')) {
+        const [, b64ssid, ip, clients] = line.split(' ');
+        ap = (utf8from64(b64ssid) || '?') + '   IP ' + ip + '  客户端 ' + clients;
+      } else if (line.startsWith('SAVED ')) {
+        saved = utf8from64(line.slice(6)) || '（无）';
+      }
+    }
+    $('wifiStatus').textContent =
+      'STA（路由器）: ' + sta + '\n' +
+      '热点（AP）  : ' + ap + '\n' +
+      '已保存配置  : ' + saved;
+    log('WiFi 状态已刷新', 'ok');
+  } catch (e) {
+    log('状态刷新失败: ' + e.message, 'err');
+  } finally { setBusy(false); }
+}
+
+/* ================= 文件面板（同例程 03） ================= */
+const splitLastSpace = s => { const i = s.lastIndexOf(' '); return [s.slice(0, i), s.slice(i + 1)]; };
+
+async function refreshList() {
+  setBusy(true);
+  const items = [];
+  try {
+    await request('LIST', line => {
+      if (line.startsWith('F ')) { const [n, sz] = splitLastSpace(line.slice(2)); items.push({ name: n, size: +sz, dir: false }); }
+      else if (line.startsWith('D ')) items.push({ name: line.slice(2), size: 0, dir: true });
+    });
+    renderList(items);
+    log('文件列表: ' + items.length + ' 项', 'ok');
+  } catch (e) {
+    log('刷新列表失败: ' + e.message, 'err');
+  } finally { setBusy(false); }
+}
+
+function renderList(items) {
+  const body = $('fileBody');
+  body.innerHTML = '';
+  $('fileEmpty').style.display = items.length ? 'none' : 'block';
+  for (const it of items) {
+    const tr = document.createElement('tr');
+    const name = document.createElement('td'); name.className = 'name';
+    name.textContent = (it.dir ? '📁 ' : '📄 ') + it.name;
+    const size = document.createElement('td'); size.className = 'size';
+    size.textContent = it.dir ? '—' : fmtSize(it.size);
+    const ops = document.createElement('td'); ops.className = 'ops';
+    if (!it.dir) {
+      ops.appendChild(btn('查看', () => viewFile(it.name)));
+      ops.appendChild(btn('下载', () => downloadFile(it.name)));
+    }
+    ops.appendChild(btn('删除', () => delFile(it.name), 'danger'));
+    tr.append(name, size, ops);
+    body.appendChild(tr);
+  }
+}
+const btn = (label, fn, cls) => {
+  const b = document.createElement('button');
+  b.className = 'small ' + (cls || 'ghost');
+  b.textContent = label;
+  b.onclick = () => { if (!busy) fn(); };
+  return b;
+};
+const fmtSize = n => n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
+
+async function readFile(name) {
+  const chunks = [];
+  await request('READ ' + name, line => {
+    if (line.startsWith('B ')) chunks.push(line.slice(2));
+  }, 60000);
+  return base64ToBytes(chunks.join(''));
+}
+
+let currentFile = null;   // 当前查看的文件名
+let currentBytes = null;  // 当前查看的原始字节（下载用）
+
+async function viewFile(name) {
+  setBusy(true);
+  try {
+    log('读取 ' + name + ' …');
+    const bytes = await readFile(name);
+    currentFile = name; currentBytes = bytes;
+    let text = null;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) { /* 二进制 */ }
+    const body = $('modalBody');
+    if (text !== null) {
+      body.textContent = text;
+    } else {
+      body.textContent = '⚠ 二进制文件（' + fmtSize(bytes.length) + '），无法预览，请使用「下载」。\n\n' + hexPreview(bytes);
+    }
+    $('modalTitle').textContent = name + '（' + fmtSize(bytes.length) + '）';
+    $('modal').classList.add('show');
+    log('已读取 ' + name + '（' + fmtSize(bytes.length) + '）', 'ok');
+  } catch (e) {
+    log('读取失败: ' + e.message, 'err');
+  } finally { setBusy(false); }
+}
+
+function hexPreview(bytes, max = 256) {
+  const n = Math.min(bytes.length, max);
+  const rows = [];
+  for (let i = 0; i < n; i += 16) {
+    const hex = Array.from(bytes.subarray(i, i + 16)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+    rows.push(hex);
+  }
+  return rows.join('\n') + (bytes.length > n ? '\n…' : '');
+}
+
+function closeModal() { $('modal').classList.remove('show'); }
+
+function copyContent() {
+  navigator.clipboard.writeText($('modalBody').textContent)
+    .then(() => log('已复制到剪贴板', 'ok'))
+    .catch(e => log('复制失败: ' + e.message, 'err'));
+}
+
+function downloadContent() { downloadBytes(currentFile || 'file', currentBytes || $('modalBody').textContent); }
+
+async function downloadFile(name) {
+  setBusy(true);
+  try {
+    log('下载 ' + name + ' …');
+    const bytes = await readFile(name);
+    downloadBytes(name, bytes);
+    log('已下载 ' + name, 'ok');
+  } catch (e) { log('下载失败: ' + e.message, 'err'); }
+  finally { setBusy(false); }
+}
+
+function downloadBytes(name, bytesOrText) {
+  const blob = typeof bytesOrText === 'string'
+    ? new Blob([bytesOrText], { type: 'text/plain;charset=utf-8' })
+    : new Blob([bytesOrText]);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function delFile(name) {
+  if (!confirm('确定删除板子上的 ' + name + ' 吗？')) return;
+  setBusy(true);
+  try {
+    await request('DEL ' + name, () => {});
+    log('已删除 ' + name, 'ok');
+    await refreshList();
+  } catch (e) { log('删除失败: ' + e.message, 'err'); }
+  finally { setBusy(false); }
+}
+
+/* ---------- 上传 ---------- */
+function uploadSelected(input) {
+  const f = input.files[0];
+  input.value = '';
+  if (f) uploadFile(f);
+}
+
+async function uploadFile(file) {
+  setBusy(true);
+  const prog = $('uploadProg'); prog.style.display = 'block';
+  try {
+    log('准备上传 ' + file.name + '（' + fmtSize(file.size) + '）…');
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const b64 = bytesToBase64(bytes);
+    await request('WRITE_BEGIN ' + file.name + ' ' + bytes.length, () => {}, 5000);
+    const total = Math.ceil(b64.length / WRITE_CHUNK_B64);
+    for (let i = 0, c = 0; i < b64.length; i += WRITE_CHUNK_B64, c++) {
+      await cmdChar.writeValue(enc('WRITE_CHUNK ' + b64.slice(i, i + WRITE_CHUNK_B64) + '\n'));
+      prog.value = Math.round((c + 1) / total * 100);
+      if (c % 20 === 19) await new Promise(r => setTimeout(r, 1)); // 让出主线程
+    }
+    await request('WRITE_END', () => {}, 10000);
+    log('上传完成: ' + file.name, 'ok');
+    await refreshList();
+  } catch (e) {
+    log('上传失败: ' + e.message, 'err');
+  } finally {
+    prog.style.display = 'none';
+    setBusy(false);
+  }
+}
+
+function bytesToBase64(bytes) {
+  let s = '';
+  const STEP = 0x8000;
+  for (let i = 0; i < bytes.length; i += STEP) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + STEP));
+  }
+  return btoa(s);
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/* ---------- LED 控制 ---------- */
+const PRESETS = [
+  ['红', '#ff0000'], ['绿', '#00ff00'], ['蓝', '#0000ff'], ['黄', '#ffff00'],
+  ['青', '#00ffff'], ['品红', '#ff00ff'], ['白', '#ffffff'], ['橙', '#ff8000'],
+];
+(function buildSwatches() {
+  const box = $('swatches');
+  for (const [label, hex] of PRESETS) {
+    const b = document.createElement('button');
+    b.style.background = hex;
+    b.title = label;
+    b.onclick = () => { $('picker').value = hex; setHex(hex); };
+    box.appendChild(b);
+  }
+})();
+
+const hexToRgb = hex => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+
+function sendPicker() { setHex($('picker').value); }
+
+async function setHex(hex) {
+  try {
+    const [r, g, b] = hexToRgb(hex);
+    await setLed(r, g, b);
+    log('LED -> rgb(' + r + ',' + g + ',' + b + ')', 'ok');
+  } catch (e) { log('LED 设置失败: ' + e.message, 'err'); }
+}
+
+async function setLed(r, g, b) {
+  if (!ledChar) throw new Error('未连接');
+  await ledChar.writeValue(new Uint8Array([r, g, b]));
+}
+
+/* ---------- 快捷键 & 清理 ---------- */
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+window.addEventListener('beforeunload', () => {
+  if (device && device.gatt.connected) { try { device.gatt.disconnect(); } catch (e) {} }
+});
+log('页面就绪。请先通过 HTTPS 打开本页，再点击「连接设备」。', 'sys');
+</script>
+</body>
+</html>
