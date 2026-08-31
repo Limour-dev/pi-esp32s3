@@ -417,7 +417,8 @@ chk("LWT 已设置（offline，保留）", cli.lw == (b"esp32s3/status", b"offli
 chk("已订阅灯珠主题", cli.subscribed == [(b"esp32s3/led", 0)])
 pub = {t: (m, r) for t, m, r, q in cli.published}
 chk("上线发布 online（保留）", pub.get(b"esp32s3/status") == (b"online", True))
-chk("当前颜色发布到 state（保留）", pub.get(b"esp32s3/led/state") == (b"#00b4b4", True), pub)  # WiFi 已连：青
+ind_cyan = ("#%02x%02x%02x" % main._dim_indicator((0, 180, 180))).encode()
+chk("当前颜色发布到 state（保留，指示灯缩亮）", pub.get(b"esp32s3/led/state") == (ind_cyan, True), pub)  # WiFi 已连：青
 
 # ---- 保持连接：check_msg + 周期性 ping ----
 main._last_ping = 0

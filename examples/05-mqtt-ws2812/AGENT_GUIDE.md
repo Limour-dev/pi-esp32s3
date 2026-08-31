@@ -84,6 +84,8 @@ MQTT 已连接: <broker>:8883 | 订阅 esp32s3/led 控制灯珠
 ```
 
 板载 WS2812 灯珠：广播中**暗绿**，路由器连上后**青色**；若之前保存过 MQTT 配置则继续连 broker。
+状态色默认按 `config.INDICATOR_BRIGHTNESS`（默认 10）从 0-255 等比缩亮（`main._dim_indicator`），避免高功率灯珠刺眼；
+用户经 MQTT/网页控制的颜色仍走 0-255 不受影响。
 
 ## 5. 部署网页（需要 HTTPS）
 

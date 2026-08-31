@@ -65,6 +65,7 @@ try:
     DEVICE_NAME = config.DEVICE_NAME
     WS2812_PIN = config.WS2812_PIN
     WS2812_NUM = config.WS2812_NUM
+    INDICATOR_BRIGHTNESS = config.INDICATOR_BRIGHTNESS
     LED_SERVICE_UUID = config.LED_SERVICE_UUID
     LED_CHAR_UUID = config.LED_CHAR_UUID
     FILE_SERVICE_UUID = config.FILE_SERVICE_UUID
@@ -90,6 +91,7 @@ except ImportError:
     DEVICE_NAME = "ESP32S3-MQTT"
     WS2812_PIN = 48
     WS2812_NUM = 1
+    INDICATOR_BRIGHTNESS = 10
     LED_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb"
     LED_CHAR_UUID = "0000fff1-0000-1000-8000-00805f9b34fb"
     FILE_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
@@ -166,6 +168,13 @@ def _led_state():
     return "adv"
 
 
+
+def _dim_indicator(rgb):
+    """指示灯状态色：0-255 源色按 INDICATOR_BRIGHTNESS 等比缩小（默认上限 10，避免刺眼）。"""
+    s = INDICATOR_BRIGHTNESS / 255.0
+    return tuple(int(round(c * s)) for c in rgb)
+
+
 def _current_rgb_hex():
     """当前应显示颜色的 #RRGGBB 串（与 _led_state 一致）。"""
     if led_user is not None:
@@ -173,9 +182,8 @@ def _current_rgb_hex():
     m = {"ble": (0, 0, 80), "wifi-connecting": (255, 120, 0), "wifi-up": (0, 180, 180)}
     c = m.get(_led_state())
     if c:
-        return "#%02x%02x%02x" % c
-    return "#002800"          # 广播中：暗绿
-
+        return "#%02x%02x%02x" % _dim_indicator(c)
+    return "#%02x%02x%02x" % _dim_indicator((0, 40, 0))    # 广播中：暗绿
 
 def apply_led():
     global led_dirty, led_pub_dirty
@@ -186,13 +194,13 @@ def apply_led():
     if s == "user":
         set_color(*led_user)
     elif s == "ble":
-        set_color(0, 0, 80)        # BLE 已连接：蓝
+        set_color(*_dim_indicator((0, 0, 80)))          # BLE 已连接：蓝
     elif s == "wifi-connecting":
-        set_color(255, 120, 0)     # 正在连接路由器：橙
+        set_color(*_dim_indicator((255, 120, 0)))       # 正在连接路由器：橙
     elif s == "wifi-up":
-        set_color(0, 180, 180)     # 路由器已连接：青
+        set_color(*_dim_indicator((0, 180, 180)))       # 路由器已连接：青
     else:
-        set_color(0, 40, 0)        # 广播中：暗绿
+        set_color(*_dim_indicator((0, 40, 0)))          # 广播中：暗绿
     if led_pub_dirty:
         led_pub_dirty = False
         _mqtt_publish_state()
