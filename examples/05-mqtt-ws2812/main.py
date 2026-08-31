@@ -13,7 +13,7 @@
 #     上电自动按保存的配置连接，断线后每 STA_RETRY_INTERVAL 秒自动重连。
 #
 # MQTT 行为：
-#   - 配置（broker 地址/端口/账号/密码）经 BLE 命令 MQTT_SET 保存到 /wifi.json，
+#   - 配置（broker 地址/端口/账号/密码）经 BLE 命令 MQTT_SET 保存到 /mqtt.json（与 WiFi 配置分开），
 #     WiFi 就绪后自动连接（TLS），断线按 MQTT_RETRY_INTERVAL 秒重试。
 #   - 订阅 config.MQTT_LED_TOPIC（默认 esp32s3/led）控制灯珠：
 #       消息内容: #RRGGBB（如 #ff0000）或 r,g,b（如 255,0,0）
@@ -75,6 +75,7 @@ try:
     STA_CONNECT_TIMEOUT = config.STA_CONNECT_TIMEOUT
     STA_RETRY_INTERVAL = config.STA_RETRY_INTERVAL
     WIFI_CFG_FILE = config.WIFI_CFG_FILE
+    MQTT_CFG_FILE = config.MQTT_CFG_FILE
     MQTT_PORT = config.MQTT_PORT
     MQTT_TLS_VERIFY = config.MQTT_TLS_VERIFY
     MQTT_CA_CERT_FILE = config.MQTT_CA_CERT_FILE
@@ -99,6 +100,7 @@ except ImportError:
     STA_CONNECT_TIMEOUT = 20
     STA_RETRY_INTERVAL = 30
     WIFI_CFG_FILE = "/wifi.json"
+    MQTT_CFG_FILE = "/mqtt.json"
     MQTT_PORT = 8883
     MQTT_TLS_VERIFY = True
     MQTT_CA_CERT_FILE = "/mqtt_ca.pem"
@@ -221,10 +223,9 @@ def _sta():
 
 
 def _wifi_load_cfg():
-    """开机读取 /wifi.json，恢复路由器与 MQTT 配置。"""
-    global saved_sta, mqtt_cfg
+    """开机读取 /wifi.json，恢复路由器配置（MQTT 单独在 /mqtt.json，见 _mqtt_load_cfg）。"""
+    global saved_sta
     saved_sta = None
-    mqtt_cfg = None
     try:
         with open(WIFI_CFG_FILE) as f:
             d = ujson.loads(f.read())
@@ -236,6 +237,20 @@ def _wifi_load_cfg():
     sta = d.get("sta") or {}
     if sta.get("ssid"):
         saved_sta = {"ssid": str(sta["ssid"]), "password": str(sta.get("password", ""))}
+
+
+def _mqtt_load_cfg():
+    """开机读取 /mqtt.json，恢复 MQTT 配置。"""
+    global mqtt_cfg
+    mqtt_cfg = None
+    try:
+        with open(MQTT_CFG_FILE) as f:
+            d = ujson.loads(f.read())
+    except OSError:
+        return                     # 没有配置文件：保持默认（无）
+    except ValueError as e:
+        print("mqtt.json 解析失败（忽略）:", e)
+        return
     m = d.get("mqtt") or {}
     if m.get("host"):
         mqtt_cfg = {
@@ -245,19 +260,28 @@ def _wifi_load_cfg():
             "password": str(m.get("password", "")),
         }
 
-
 def _wifi_save_cfg():
-    """把当前保存的路由器/MQTT 配置写回 /wifi.json。"""
+    """把当前保存的路由器配置写回 /wifi.json（只含 sta，MQTT 在 /mqtt.json）。"""
     d = {}
     if saved_sta:
         d["sta"] = saved_sta
-    if mqtt_cfg:
-        d["mqtt"] = mqtt_cfg
     try:
         with open(WIFI_CFG_FILE, "w") as f:
             f.write(ujson.dumps(d))
     except OSError as e:
         print("wifi.json 写入失败:", e)
+
+
+def _mqtt_save_cfg():
+    """把当前 MQTT 配置写回 /mqtt.json（只含 mqtt，WiFi 在 /wifi.json）。"""
+    d = {}
+    if mqtt_cfg:
+        d["mqtt"] = mqtt_cfg
+    try:
+        with open(MQTT_CFG_FILE, "w") as f:
+            f.write(ujson.dumps(d))
+    except OSError as e:
+        print("mqtt.json 写入失败:", e)
 
 
 def _wifi_scan():
@@ -359,7 +383,7 @@ def _b64s(raw):
 
 
 # ---------------- MQTT（TLS 8883 + 账号密码，控制 WS2812） ----------------
-mqtt_cfg = None            # /wifi.json 里保存的 MQTT 配置 {"host","port","user","password"}；None=未配置
+mqtt_cfg = None            # /mqtt.json 里保存的 MQTT 配置 {"host","port","user","password"}；None=未配置
 mqtt_client = None         # 当前 MQTTClient 实例
 mqtt_state = "off"         # off(未配置) / disconnected(配置了未连上) / connecting / connected
 mqtt_err = None            # 最近一次连接/运行错误（字符串，MQTT_STATUS 展示）
@@ -389,7 +413,9 @@ def _ntp_tick():
         return
     _ntp_retry = time.ticks_ms()
     try:
-        print("NTP 校时 ...")
+        if getattr(ntptime, "host", None) is None:
+            ntptime.host = NTP_HOST      # 首次使用时设置 NTP 服务器
+        print("NTP 校时 (%s) ..." % ntptime.host)
         ntptime.settime()
         _clock_ok = _clock_sane()
         print("NTP 校时完成: %s" % str(time.localtime()[:6]))
@@ -984,7 +1010,7 @@ def _cmd_mqtt_set(rest):
         _notify("ERR bad port")
         return
     mqtt_cfg = {"host": host, "port": port, "user": user, "password": pwd}
-    _wifi_save_cfg()
+    _mqtt_save_cfg()
     _last_mqtt_attempt = 0      # 立即触发连接
     print("MQTT 配置已保存: %s:%s 用户 %s" % (host, port, user or "(无)"))
     _notify("OK mqtt configured")
@@ -996,7 +1022,7 @@ def _cmd_mqtt_forget():
     global mqtt_cfg
     mqtt_cfg = None
     _mqtt_disconnect()
-    _wifi_save_cfg()
+    _mqtt_save_cfg()
     print("已删除 MQTT 配置")
     _notify("OK mqtt forgotten")
     _notify("DONE")
@@ -1090,8 +1116,9 @@ def main():
     print("用浏览器打开 web/index.html（需 HTTPS）连接本设备，连接后先输密码")
     print("=" * 56)
 
-    # 1) 读取保存的 WiFi/MQTT 配置
+    # 1) 读取保存的 WiFi（/wifi.json）与 MQTT（/mqtt.json）配置
     _wifi_load_cfg()
+    _mqtt_load_cfg()
 
     # 2) 按保存的配置自动连路由器（有界等待，连不上不阻塞太久）
     if saved_sta is not None:

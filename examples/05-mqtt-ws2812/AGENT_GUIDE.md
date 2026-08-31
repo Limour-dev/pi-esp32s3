@@ -14,14 +14,14 @@
 | 文件 | 作用 |
 |------|------|
 | `boot.py` | 看门狗：main.py 崩溃自动重启（同 03/04） |
-| `config.py` | 设备名 / UUID / 灯珠引脚 / 蓝牙密码 / WiFi 参数 / **MQTT 参数（端口、主题、CA 文件、TLS 开关）** |
+| `config.py` | 设备名 / UUID / 灯珠引脚 / 蓝牙密码 / WiFi 参数 / **NTP 参数（服务器、超时）** / **MQTT 参数（端口、主题、CA 文件、TLS 开关）** |
 | `main.py` | ESP32-S3 端 BLE GATT 服务器：文件服务 + LED 服务 + WiFi 服务 + **MQTT 客户端** |
 | `umqtt/` | 自带的 MQTT 客户端库（micropython-lib `umqtt.simple`，本固件 **无内置 mqtt 模块**，必须随代码上传） |
 | `web/index.html` | 网页端（Web Bluetooth 客户端，单文件，静态托管即可）：WiFi 面板 + **MQTT 面板** |
 | `test/` | 板端逻辑测试（`test_mqtt_board.py`）+ 网页端模拟测试（`test_mqtt_web.mjs`） |
 
-**WiFi/MQTT 连接配置不在 config.py 里**：通过网页面板操作，保存到板子 Flash 的 `/wifi.json`
-（内容 `{"sta": {...}, "mqtt": {...}}`），上电自动按保存的配置连路由器、再连 MQTT。
+**WiFi/MQTT 连接配置不在 config.py 里**：通过网页面板操作，路由器配置保存到板子 Flash 的 `/wifi.json`
+（内容 `{"sta": {...}}`），MQTT 配置保存到 `/mqtt.json`（内容 `{"mqtt": {...}}`），上电自动按保存的配置连路由器、再连 MQTT。
 改 `config.py` 的 `BLE_PASSWORD` / UUID / 设备名 / MQTT 主题后，`web/index.html` 顶部常量要同步改。
 
 ## 2. 架构说明（为什么这么设计）
@@ -38,7 +38,8 @@
   `MQTT_TLS_VERIFY=True` 且时钟未校准时，MQTT 不会发起连接（状态显示“等待 NTP 校时”）。
 - **TLS 校验的 CA 必须上传**：本固件（v1.29.0）**没有内置 CA 证书库**（固件里只有格式串，
   无根证书）。`MQTT_TLS_VERIFY=True` 时把服务器 CA 的 PEM 上传为 `/mqtt_ca.pem`
-  （公网 CA 如 Let's Encrypt 的完整链：叶子+中间+根）。自签证书临时调试可设 `MQTT_TLS_VERIFY=False`。
+  （公网 CA 如 Let's Encrypt 的完整链：叶子+中间+根）。自签证书临时调试可设 `MQTT_TLS_VERIFY=False`；
+  `/mqtt_ca.pem` 怎么配、要不要跟着证书更新，详见第 9 节。
 - **账号密码走 base64**：broker 地址/用户名/密码可能与空格/中文/任意字节无关，但为与
   SSID 一致，`MQTT_SET` 一律 base64 传输；**用户名/密码可为空**（匿名 broker），
   板端解析允许缺省空参数。
@@ -99,7 +100,7 @@ Cloudflare Pages），或本地 `python3 -m http.server 8000` 后用 `localhost`
    上电自动重连。
 4. **MQTT 面板**：填 broker 地址（如 `mqtt.example.com`）、端口（默认 `8883`）、用户名、密码
    →「保存并连接」。若 `MQTT_TLS_VERIFY=True`：需先把服务器 CA 的 PEM 上传为 `/mqtt_ca.pem`
-   （公网 CA 直接传完整链即可），否则 MQTT_STATUS 会显示证书校验错误。成功后状态面板
+   （配置方法与 ZeroSSL/公网证书实战见第 9 节），否则 MQTT_STATUS 会显示证书校验错误。成功后状态面板
    `MQTT CONNECTED`，灯珠无变化（MQTT 只响应控制消息）。
 5. **MQTT 控制灯珠**：任意 MQTT 客户端（MQTT Explorer / paho / 手机 App）连接同一 broker
    （TLS 8883 + 账号密码），向 `esp32s3/led` 发布：
@@ -120,14 +121,15 @@ Cloudflare Pages），或本地 `python3 -m http.server 8000` 后用 `localhost`
 | 连不上路由器 | 看串口日志原因：`wrong password` / `network not found` / `handshake timeout` |
 | MQTT 状态显示「等待 NTP 校时」 | 路由器没外网（NTP 走 UDP 123）；或刚开机正在校时，稍等 30 秒内自动重试 |
 | MQTT 连接失败：证书时间错误 | 板子 RTC 无电池，等 NTP 校时完成（看串口 `NTP 校时完成`）；校时失败查路由器外网 |
-| MQTT 连接失败：证书校验失败 | 本固件无内置 CA：上传服务器 CA 链到 `/mqtt_ca.pem`（网页文件面板即可）；或临时设 `MQTT_TLS_VERIFY=False` |
+| MQTT 连接失败：证书校验失败 | 本固件无内置 CA：上传服务器 CA 链到 `/mqtt_ca.pem`（网页文件面板即可，方法与验证见第 9 节）；或临时设 `MQTT_TLS_VERIFY=False` |
+| 面板显示 CONNECTED，但 broker 上没板子 | 状态是旧的：板子已掉线（WiFi 断 / broker 重启 / 掉电）。用 `test/test_mqtt_broker_probe.py` 连 broker 确认在线数与 `esp32s3/#` 保留消息；板子断线后 10 秒自动重连，查串口日志当前 MQTT 状态与错误 |
 | MQTT 连接失败：`not authorized` / 无权限 | broker 用户名/密码错（Mosquitto `allow_anonymous false`） |
 | MQTT 连上但灯不亮 | 主题是否一致（默认 `esp32s3/led`，可在 config.py 改）；消息格式 `#RRGGBB` 或 `r,g,b`；订阅的是否是同一 broker 的同一 topic |
-| 重启后不自动连 MQTT | 确认保存过配置（`/wifi.json` 有 `mqtt` 键）；WiFi 要先通；`MQTT_RETRY_INTERVAL` 默认 10 秒，稍等 |
+| 重启后不自动连 MQTT | 确认保存过配置（`/mqtt.json` 有 `mqtt` 键）；WiFi 要先通（`/wifi.json` 有 `sta`）；`MQTT_RETRY_INTERVAL` 默认 10 秒，稍等 |
 | `MQTT_STATUS` 显示最近错误 | 网页 MQTT 面板底部会显示 `MQTT_ERR`（base64 解码后的文字） |
 | REPL 连不上（mpremote exec 报错） | 看门狗 + 主循环占着主线程，属正常；Ctrl-C 打断或用复位 |
 | 想恢复例程 04 | 重新上传 `examples/04-wifi-ble-console/` 的 boot/config/main 三个 py |
-| `/wifi.json` 里有明文密码 | 是（Flash 明文保存），BLE 空口也是明文；只防误连不防嗅探，别存重要密码 |
+| `/wifi.json` / `/mqtt.json` 里有明文密码 | 是（Flash 明文保存），BLE 空口也是明文；只防误连不防嗅探，别存重要密码 |
 
 ## 8. 已踩过的坑（实现时别重犯）
 
@@ -153,3 +155,66 @@ Cloudflare Pages），或本地 `python3 -m http.server 8000` 后用 `localhost`
 9. **复用 03/04 的坑**：GATT 服务一次注册、`bytearray` 无 del/clear、IRQ 只做轻量工作
    （LED 用户色只置脏标记，颜色发布放到主循环 `apply_led` 里做，避免 IRQ 里做 TLS 网络 IO）、
    每条命令响应以 `DONE` 收尾、断开时 reject 挂起请求——本目录 main.py 已全部遵守。
+
+## 9. CA 证书配置详解（/mqtt_ca.pem 的来龙去脉）
+
+`/mqtt_ca.pem` **不是固件自带的**：本固件无内置根证书库（见第 2 节与第 8 节第 3 条），
+需要把服务器 CA 链的 PEM **手动上传**到板子 Flash 根目录（网页 BLE 文件面板「上传文件到板子」，
+或 `mpremote cp`）。`MQTT_TLS_VERIFY=True` 时每次 TLS 连接都用 `load_verify_locations(cadata=...)` 读它。
+
+### 9.1 用正经 CA（ZeroSSL / Let's Encrypt 等）签的证书
+
+证书链 = 叶子 + 中间 + 根，客户端校验实际用到的只有**中间 + 根**（叶子是服务器握手时现发的）。
+以本仓库实测（2026-09-01，`openssl s_client -showcerts` 抓 `cdn-g.limour.top:8883`）的 ZeroSSL 链为例：
+
+```
+CN=*.limour.top                                   ← 叶子（服务器握手现发）
+  └─ ZeroSSL ECC DV SSL CA 2                     ← 中间（ZeroSSL 自有中间，不是 Sectigo 老中间）
+       └─ Sectigo Public Server Authentication Root E46   ← 根（被 USERTrust ECC Certification Authority 交叉签名）
+```
+
+- **ZeroSSL 现在用自有中间证书**：ECC 证书 → `ZeroSSL ECC DV SSL CA 2`，RSA 证书 → `ZeroSSL RSA DV SSL CA 2`；
+  根是 Sectigo 的 `Sectigo Public Server Authentication Root E46`（又被 USERTrust ECC 交叉签名，任选其一作锚点都行）。
+
+**最简单：把 `fullchain.pem`（或 ZeroSSL 下载包里的 `ca_bundle.crt`）整个传为 `/mqtt_ca.pem` 即可**，
+文件里多余的证书（含叶子）校验时自动忽略，不用裁剪。
+
+**叶子证书经常续期/更换不影响 `/mqtt_ca.pem`**：服务器每次握手现发叶子 + 中间，板子只存中间 + 根；
+只要新叶子还是同一张中间签的，链就照常通过——续期 N 次都不用重传。
+只有三种情况才需要更新：**换 CA 供应商**、**中间证书轮换**（CA 弃用旧中间签发新中间）、**根证书过期**
+（根有效期一般十年以上，基本不用管；具体以 9.4 验证命令实测为准）。
+
+### 9.2 只想传根证书
+
+可以，前提：**broker 必须把中间证书随握手一起下发**（Mosquitto / EMQX 等标准 broker 默认都会）。
+那样链是 `叶子(服务器发) → 中间(服务器发) → 根(板子存)`，只存根即可通过。
+若 broker 配得简陋只发叶子不发中间，则必须把中间也放进 `/mqtt_ca.pem`（传整个 bundle 最稳）。
+
+从 `ca_bundle.crt` 里提取根（subject == issuer 的自签名那张）：
+
+```bash
+csplit -f ca_ -b '%d.pem' ca_bundle.crt '/-----BEGIN CERTIFICATE-----/' '{*}'
+rm -f ca_0.pem
+for f in ca_*.pem; do echo "== $f =="; openssl x509 -in "$f" -noout -subject -issuer; done
+```
+
+RSA / ECC 证书的中间/根不同（ZeroSSL：ECC 中间 `ZeroSSL ECC DV SSL CA 2` / RSA 中间 `ZeroSSL RSA DV SSL CA 2`，根都是 Sectigo E46 系），选错会报 unknown CA；以 9.3 抓到的实际链为准。
+
+### 9.3 从 broker 现抓链（不挑 CA，保证顺序）
+
+```bash
+echo | openssl s_client -connect <broker域名>:8883 -showcerts 2>/dev/null \
+  | awk '/-----BEGIN CERTIFICATE-----/{f=1} f' > ca_bundle.pem
+```
+
+### 9.4 传之前先验证（30 秒）
+
+```bash
+openssl s_client -connect <broker域名>:8883 \
+  -CAfile /path/to/mqtt_ca.pem -verify_return_error </dev/null 2>&1 | grep "Verify return code"
+```
+
+`Verify return code: 0 (ok)` → 上传必通。
+
+> 别用 `MQTT_TLS_VERIFY=False` 图省事：TLS 校验的意义就在于防中间人冒充 broker，
+> 关掉后 MQTT 账号密码等于裸奔。CA 链几年才动一次，维护成本很低。

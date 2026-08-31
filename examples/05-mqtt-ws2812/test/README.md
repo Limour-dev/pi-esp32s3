@@ -6,6 +6,7 @@
 |------|--------|--------|
 | `test_mqtt_board.py` | 板端 `main.py` 的 WiFi+MQTT 逻辑：认证门禁、WiFi 扫描/连接/断开/忘记/状态（**无 AP 行**）、MQTT_SET/MQTT_FORGET/MQTT_STATUS、MQTT 连接状态机（WiFi 就绪才连、TLS 上下文 + CA 加载、订阅灯珠主题、收消息控灯（`#RRGGBB` / `r,g,b` / 非法负载忽略 / 非灯珠主题忽略）、状态与上线发布、check_msg 断线检测、自动重连、连接失败错误记录、配置读回与持久化、BLE 断开只清 BLE 色。mock BLE/network/ssl/umqtt/硬件模块，走 `_drain_cmds` 真实接收路径 | `python3 test/test_mqtt_board.py` |
 | `test_mqtt_web.mjs` | 网页端 `web/index.html` 的真实 JS：连接认证 → 自动刷 WiFi/MQTT 状态、WiFi 扫描列表渲染/点击填入/连接成功（含进度行）与失败/状态刷新/断开/忘记、MQTT 保存配置（含 host/port 校验）/状态刷新/忘记配置、WiFi 面板**不再显示热点**。Node `vm` + 假 BLE 设备（行为对齐 `main.py`），无需浏览器 | `node test/test_mqtt_web.mjs` |
+| `test_mqtt_broker_probe.py` | broker 连通性/板子在线探测（**只读**）：TLS 连接 broker（系统信任库校验证书），订阅 `esp32s3/#` 看有没有保留消息、`$SYS/broker/clients/connected` 看在线数。用于「面板显示 CONNECTED 但 MQTT Explorer 只有 $SYS」类问题定位。参数从命令行传（host/port/user/pass），**不硬编码凭据** | `python3 test/test_mqtt_broker_probe.py --host <broker> --port 8883 --user <user> --pass <密码>` |
 
 ## 前提
 

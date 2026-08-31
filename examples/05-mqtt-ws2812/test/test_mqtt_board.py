@@ -277,6 +277,7 @@ import main  # noqa: E402
 # ---- 把配置指到临时文件，缩短超时/重试间隔 ----
 _tmpdir = tempfile.mkdtemp(prefix="mqtt05_")
 main.WIFI_CFG_FILE = os.path.join(_tmpdir, "wifi.json")
+main.MQTT_CFG_FILE = os.path.join(_tmpdir, "mqtt.json")
 main.STA_CONNECT_TIMEOUT = 1
 main.MQTT_RETRY_INTERVAL = 0          # 断线后立即重试（测试快）
 main.MQTT_CA_CERT_FILE = os.path.join(_tmpdir, "ca.pem")
@@ -311,6 +312,14 @@ def chk(name, cond, extra=""):
 def read_cfg_file():
     try:
         with open(main.WIFI_CFG_FILE) as f:
+            return _json.load(f)
+    except OSError:
+        return None
+
+
+def read_mqtt_file():
+    try:
+        with open(main.MQTT_CFG_FILE) as f:
             return _json.load(f)
     except OSError:
         return None
@@ -355,9 +364,11 @@ main.sta_if._result = "ok"
 main._last_mqtt_attempt = 0
 out = drain(["MQTT_SET %s 8883 %s %s" % (b64("mqtt.example.com"), b64("testuser"), b64("secret"))])
 chk("MQTT_SET 响应", out == ["OK mqtt configured", "DONE"], out)
-d = read_cfg_file()
-chk("wifi.json 保存 mqtt",
+d = read_mqtt_file()
+chk("mqtt.json 保存 mqtt",
     d and d["mqtt"] == {"host": "mqtt.example.com", "port": 8883, "user": "testuser", "password": "secret"}, d)
+chk("wifi.json 不受 MQTT_SET 影响", read_cfg_file() == {"sta": {"ssid": "MyWiFi", "password": "pass123"}})
+chk("MQTT 配置未写进 wifi.json", "mqtt" not in (read_cfg_file() or {}))
 main._mqtt_tick()   # 让状态机跑一轮（WiFi 未连 → disconnected）
 chk("MQTT 未连接前状态为 disconnected", main.mqtt_state == "disconnected")
 
@@ -476,6 +487,7 @@ chk("MQTT_STATUS 含最近错误", any(l.startswith("MQTT_ERR ") for l in out), 
 # ---- 配置读回 ----
 main.mqtt_cfg = None
 main._wifi_load_cfg()
+main._mqtt_load_cfg()
 chk("重新读取配置恢复 mqtt", main.mqtt_cfg == {"host": "mqtt.example.com", "port": 8883, "user": "testuser", "password": "secret"})
 
 # ---- MQTT_FORGET ----
@@ -484,7 +496,8 @@ main._mqtt_tick()                   # 重新连上，便于验证 forget 会断�
 out = drain(["MQTT_FORGET"])
 chk("MQTT_FORGET 响应", out == ["OK mqtt forgotten", "DONE"], out)
 chk("forget 后 mqtt_cfg 清空", main.mqtt_cfg is None)
-chk("forget 后文件无 mqtt 键", "mqtt" not in (read_cfg_file() or {}))
+chk("forget 后 mqtt.json 为空", read_mqtt_file() in (None, {}) or "mqtt" not in (read_mqtt_file() or {}))
+chk("forget 不影响 wifi.json", read_cfg_file() == {"sta": {"ssid": "MyWiFi", "password": "pass123"}} or read_cfg_file() is None)
 main._mqtt_tick()
 chk("无配置 → 状态 off", main.mqtt_state == "off")
 

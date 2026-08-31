@@ -40,7 +40,8 @@ examples/<NN>-<name>/
 - 文件名：`EXPERIMENT_<例程编号>.md`，如 `EXPERIMENT_01.md`。
 - 若同一例程有多次迭代实验，用 `EXPERIMENT_01_v2.md` 或追加章节，**不要覆盖**原记录。
 - **可复用的测试脚本必须归档到例程目录的 `test/` 子目录**（与代码同目录，不另开目录）：
-  - 例：板端逻辑 mock 测试（`test/test_board.py`）、网页端端到端模拟（`test/test_web.mjs`）——按例程实际需要命名，不要求统一。
+  - 例：板端逻辑 mock 测试（`test/test_board.py`）、网页端端到端模拟（`test/test_web.mjs`）、broker 连通性探测（例程 05 的 `test/test_mqtt_broker_probe.py`）——按例程实际需要命名，不要求统一。
+  - **联网/在线探测脚本也可归档**（例：连真实 broker 验证板子是否在线、保留消息是否存在）；**凭据一律走命令行参数，不写死在文件里**。
   - 测试必须**可独立运行**：路径用相对定位（`.py` 用 `__file__` 找上级目录的 `main.py`，`.mjs` 用 `import.meta.url` 找 `../web/index.html`），不写死绝对路径。
   - 在 `test/README.md` 写清每个文件「测什么 + 怎么跑」；测试里用到的参数（如密码、设备名、引脚号）与 `config.py` 保持一致并在 README 注明。
 - 一次性调试脚本、草稿**不归档**（用完即删，如本次的 `scan_led_only.py`）——区分标准：能重跑验证逻辑的才进 `test/`，仅探测用的一次性脚本不留。

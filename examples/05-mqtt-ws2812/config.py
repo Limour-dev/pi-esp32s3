@@ -4,8 +4,9 @@
 # 注意：如果改了 UUID 或设备名，web/index.html 里对应的常量也要同步改。
 #
 # WiFi 与 MQTT 的**连接配置不在这里**：
-# 通过网页（BLE）的「WiFi 设置」/「MQTT 配置」面板操作，保存到板子 Flash 的 /wifi.json，
-# 上电自动按保存的配置连接路由器、再连 MQTT broker。
+# 通过网页（BLE）的「WiFi 设置」/「MQTT 配置」面板操作：
+# 路由器配置保存到板子 Flash 的 /wifi.json（sta），MQTT 配置保存到 /mqtt.json（mqtt），
+# 上电自动按保存的配置连路由器、再连 MQTT broker。
 
 # ---- BLE 设备名（网页搜索时按此前缀过滤）----
 DEVICE_NAME = "ESP32S3-MQTT"
@@ -35,10 +36,16 @@ CHUNK_SIZE = 180        # 每条 notify 响应行的最大字节数（含前缀�
 # ---- WiFi 连接参数（STA 连路由器；无回退热点）----
 STA_CONNECT_TIMEOUT = 20        # 连接路由器的最长等待秒数（网页连接/开机自连均适用）
 STA_RETRY_INTERVAL = 30         # 开机后若保存过路由器配置且未连上，每隔多少秒重试一次
-WIFI_CFG_FILE = "/wifi.json"    # 保存路由器/MQTT 配置的文件（板子 Flash 根目录）
-                                # 内容: {"sta": {...}, "mqtt": {...}}（明文，勿存重要密码）
+WIFI_CFG_FILE = "/wifi.json"    # 保存路由器配置的文件（板子 Flash 根目录）
+                                # 内容: {"sta": {...}}（明文，勿存重要密码）
+MQTT_CFG_FILE = "/mqtt.json"    # 保存 MQTT 配置的文件（与 WiFi 分开，互不影响）
+                                # 内容: {"mqtt": {"host","port","user","password"}}（明文）
 
-# ---- MQTT 参数（broker 地址/端口/账号/密码经网页 BLE 面板配置，保存在 /wifi.json 的 "mqtt" 键）----
+# ---- NTP 校时参数（TLS 证书校验依赖正确系统时间）----
+NTP_HOST = "ntp.aliyun.com"   # NTP 服务器（阿里云；也可换 ntp.tencent.com / pool.ntp.org）
+NTP_TIMEOUT = 8              # 单次校时超时秒数
+
+# ---- MQTT 参数（broker 地址/端口/账号/密码经网页 BLE 面板配置，保存在 /mqtt.json 的 "mqtt" 键）----
 MQTT_PORT = 8883                # TLS 端口（默认，网页面板可改）
 MQTT_TLS_VERIFY = True          # 校验服务器证书。True 时把服务器 CA 的 PEM 上传为 MQTT_CA_CERT_FILE；
                                 # 自签证书临时调试可设 False（不校验，有中间人风险）

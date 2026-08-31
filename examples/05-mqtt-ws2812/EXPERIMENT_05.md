@@ -17,8 +17,8 @@
 ## 2. 实验目的
 
 1. 在例程 04（BLE 网页控制台：文件 + LED + WiFi）基础上，**移除回退热点（AP）**，
-   新增 **MQTT 配置**：网页 BLE 面板填写 broker 地址/端口/用户名/密码，保存到 `/wifi.json`。
-2. MQTT 使用 **TLS（端口 8883）+ 账号密码认证**；配置好后板子订阅主题，
+   新增 **MQTT 配置**：网页 BLE 面板填写 broker 地址/端口/用户名/密码，保存到 `/mqtt.json`
+   （路由器配置单独存 `/wifi.json`，互不影响）。
    **通过 MQTT 消息控制 WS2812 灯珠**（`#RRGGBB` / `r,g,b`），并回发当前颜色状态。
 3. 宿主机 mock 测试 + 真机 + 公网 broker 全链路验证（真实 TLS 握手）。
 
@@ -42,7 +42,7 @@
 - 新命令：`MQTT_SET <b64host> <port> <b64user> <b64pass>`、`MQTT_FORGET`、`MQTT_STATUS`
   （返回 `MQTT <state>` / `MQTT_CFG <b64host> <port> <b64user>` / `MQTT_LED <b64topic>`
   / 可选 `MQTT_ERR <b64err>`）。
-- `/wifi.json` 扩展为 `{"sta": {...}, "mqtt": {...}}`；`MQTT_SET` 只要求成功保存，
+- 配置分开存：路由器 `/wifi.json`（`{"sta": {...}}`），MQTT `/mqtt.json`（`{"mqtt": {...}}`）；`MQTT_SET` 只要求成功保存，
   连接由主循环 `_mqtt_tick()` 状态机驱动：WiFi 就绪才连 → 订阅灯珠主题 → 保活（check_msg +
   keepalive/2 的 ping）→ 断线按 `MQTT_RETRY_INTERVAL`（10s）重连。
 - 灯珠控制：MQTT 订阅消息 `#RRGGBB`/`#RGB`/`r,g,b` → 解析 → 与 BLE 用户色同优先级
@@ -101,13 +101,13 @@
   标准行为。用户按其 `mqtt-server-deploy.md` 部署的 8883+TLS+账号密码可直接使用。
 - Web Bluetooth 真机端到端未测（VM 无蓝牙适配器，同 03/04）：靠 Node 假设备模拟 +
   板端真实命令路径双通道覆盖。
-- 板子当前 `/wifi.json` 存有验证用的 `broker.emqx.io`（匿名）配置，用户首次上电会连公共 broker，
+- 板子当前 `/mqtt.json` 存有验证用的 `broker.emqx.io`（匿名）配置，用户首次上电会连公共 broker，
   属无害演示；接入自有 broker 时在网页面板覆盖保存即可。
 
 ## 4. 最终结论
 
 - BLE 广播：**ESP32S3-MQTT**；WiFi 只走 STA，**无回退热点（AP 已移除）**。
-- MQTT：TLS 8883 + 账号密码（匿名亦可），配置经网页 BLE 面板保存到 `/wifi.json`，
+- MQTT：TLS 8883 + 账号密码（匿名亦可），配置经网页 BLE 面板保存到 `/mqtt.json`（WiFi 在 `/wifi.json`），
   上电 WiFi 就绪后自动连接、断线自动重连。
 - 灯珠控制：订阅 `esp32s3/led`，消息 `#RRGGBB`/`r,g,b`；状态回发 `esp32s3/led/state`（保留），
   上线/离线 `esp32s3/status`（保留 + LWT）。真机全链路验证通过。
@@ -135,3 +135,56 @@
    （`status` 保留 + offline LWT），让“设备当前色”可被任何客户端查询。
 8. **IRQ 里不做网络 IO**：BLE IRQ 收到颜色只置脏标记，发布放主循环——TLS socket 写
    在 IRQ 里会阻塞/重入，是隐患。
+
+## 6. CA 证书配置补充（ZeroSSL 实战问答）
+
+> 2026-09-01 补充：用户实操时问到「broker 证书经常更新怎么办 / fullchain 怎么配 / 只想传根行不行」，结论如下（与 AGENT_GUIDE.md 第 9 节一致）。
+
+- **`/mqtt_ca.pem` 的来源**：**用户手动上传**（网页 BLE 文件面板或 mpremote cp），固件无内置 CA 库（见 3.1.3 探测）。
+- **ZeroSSL 证书链（2026-09-01 本仓库实测 `cdn-g.limour.top:8883`，`openssl s_client -showcerts` 抓链）**：
+  `*.limour.top` → 中间 `ZeroSSL ECC DV SSL CA 2`（**ZeroSSL 自有中间**，不是 Sectigo 老中间）→ 根
+  `Sectigo Public Server Authentication Root E46`（被 USERTrust ECC Certification Authority 交叉签名）。
+  RSA 证书对应中间 `ZeroSSL RSA DV SSL CA 2`，根同为 Sectigo E46 系。
+- **叶子续期不用重传**：服务器握手现发叶子 + 中间，板子只存中间 + 根；新叶子只要还是同一中间签的就能过。
+  需要更新的只有三种情况：换 CA 供应商 / 中间证书轮换 / 根过期（根有效期一般十年以上，基本不用管）。
+- **`fullchain.pem` 整个传上去就能用**（含叶子也无妨，校验时多余证书被忽略）；ZeroSSL 下载包里的 `ca_bundle.crt`（中间+根）最干净。
+- **2026-09-01 已验证**：`openssl s_client -showcerts` 从线上抓的中间+根拼接文件（3264B）直接当 `/mqtt_ca.pem`，板子 TLS 校验通过（此前旧链报 `The certificate is not correctly signed by the trusted CA`）。
+- **只传根可行**，前提是 broker 下发中间证书（Mosquitto / EMQX 默认都会）；broker 只发叶子时不成立，得把中间也带上。
+- 提取根 / 从 broker 现抓链 / 传前验证的 openssl 命令，见 AGENT_GUIDE.md 第 9 节 9.2–9.4。
+
+### 6.1 板子面板显示 CONNECTED 但 broker 上没有它（排查记录）
+
+> 2026-09-01 用户实测：BLE 网页面板 MQTT 面板显示「状态 CONNECTED / 配置 cdn-g.limour.top:8883 / 用户 limour」，
+> 但 MQTT Explorer 连上后只看到 `$SYS`，看不到任何 `esp32s3/` 主题。
+
+排查（宿主机 paho 只读 probe，归档于 `test/test_mqtt_broker_probe.py`）：
+
+1. 连接 `cdn-g.limour.top:8883`（TLS + 系统信任库 + 账号密码）→ `rc=Success`，凭据有效，broker 是 Mosquitto 2.1.2。
+2. 订阅 `esp32s3/#`（22 秒）：**零条消息**——没有 `esp32s3/status` 也没有 `esp32s3/led/state` 的保留消息。
+3. 订阅 `$SYS/broker/clients/connected`：`1`（只有 probe 自己）→ 中途变 `2`（另一客户端连上，但没发任何 esp32s3 消息，
+   应为用户开着的 MQTT Explorer）。
+
+结论与判断依据：
+
+- **板子此刻不在这个 broker 上**。若板子在线，`clients/connected` 应 ≥2 且连上时会发两条保留消息
+  （`esp32s3/status=online` + `esp32s3/led/state`，见 main.py `_mqtt_connect`）。
+- **连 `offline` 保留消息都没有** → 板子从未成功连上过这个 broker（或 broker 重启清过保留且板子没重连成功）。
+  LWT 触发也会留下 `esp32s3/status=offline` 保留消息。
+- 网页面板的「CONNECTED」是**过期状态**（Web Bluetooth 面板轮询到的是之前某时刻的状态）。
+- `$SYS` 任何 broker 都有，**「看得到 $SYS」不能证明连对了**；要看 `$SYS/broker/clients/connected` 在线数
+  和 `esp32s3/#` 保留消息。
+
+**后续进展（同日复盘，两个根因都已定位并修复）**：
+
+1. **根因一：板子根本没连 WiFi**——查板子 Flash，`/wifi.json` 只有 `mqtt` 键、没有 `sta`
+   （路由器配置丢失，最可能是网页点过「忘记配置」）。无 WiFi → 无 NTP 校时 → MQTT 连不上。
+   用网页 BLE 面板重配 `Redmi_719_2.4G_8` 后恢复。
+2. **根因二：TLS 证书校验失败**——网页 MQTT 面板报「The certificate is not correctly signed by the trusted CA」。
+   板子 `/mqtt_ca.pem` 里装的是旧文档写错的链；用 `openssl s_client -showcerts` 从线上抓真实链，
+   拼 `ZeroSSL ECC DV SSL CA 2`（中间）+ `Sectigo Public Server Authentication Root E46`（根）
+   共 3264 字节传上去，TLS 校验通过、MQTT 秒连。
+3. **修复验证**（probe 实测）：`esp32s3/status=online`（保留）+ `esp32s3/led/state=#00b4b4`，
+   `$SYS/broker/clients/connected` 2→3，exit=0。板端日志：路由器 Redmi_719_2.4G_8（192.168.88.242）
+   → NTP 校时 → MQTT 已连接 cdn-g.limour.top:8883。
+4. **顺带重构**：MQTT 配置从 `/wifi.json` 拆到独立 `/mqtt.json`（config.py `MQTT_CFG_FILE`），
+   WiFi 与 MQTT 配置互不影响；板子上旧 `wifi.json` 里的 mqtt 键已迁移。
