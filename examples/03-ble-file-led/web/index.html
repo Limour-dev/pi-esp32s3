@@ -54,6 +54,10 @@
   .swatches button { width: 34px; height: 34px; border-radius: 6px; padding: 0; border: 2px solid transparent; }
   .swatches button.active { border-color: #fff; }
   .preset-label { font-size: .78rem; color: var(--dim); }
+  #authPwd { width: 100%; padding: 9px 11px; margin: 10px 0 4px;
+             background: var(--panel2); color: var(--fg); border: 1px solid var(--border);
+             border-radius: 6px; font-size: 1rem; }
+  #authPwd:focus { outline: none; border-color: var(--acc); }
   progress { width: 100%; height: 6px; border: none; border-radius: 3px; }
   progress::-webkit-progress-bar { background: var(--panel2); border-radius: 3px; }
   progress::-webkit-progress-value { background: var(--acc); border-radius: 3px; }
@@ -71,7 +75,7 @@
   <div class="row">
     <button id="btnConnect" onclick="doConnect()">&#128279; 连接设备</button>
     <button id="btnDisconnect" class="ghost" disabled onclick="doDisconnect()">断开</button>
-    <span class="hint">搜索设备名前缀 <code>ESP32S3</code>（本仓库默认 <code>ESP32S3-FS</code>）</span>
+    <span class="hint">搜索设备名前缀 <code>ESP32S3</code>（默认 <code>ESP32S3-FS</code>）；连接后需输入密码（板端 <code>config.py</code> 的 <code>BLE_PASSWORD</code>）</span>
   </div>
 </div>
 
@@ -116,6 +120,22 @@
       </span>
     </div>
     <pre class="modal-body" id="modalBody"></pre>
+  </div>
+</div>
+
+<div class="modal" id="authModal">
+  <div class="modal-box" style="width:min(92vw,380px)">
+    <div class="modal-head"><strong>&#128273; 输入连接密码</strong></div>
+    <div class="modal-body" style="font-family:inherit; white-space:normal">
+      <p class="hint">此设备已开启密码保护。请输入密码
+        （默认见板端 <code>config.py</code> 的 <code>BLE_PASSWORD</code>），
+        连续输错 3 次会被设备断开。</p>
+      <input type="password" id="authPwd" placeholder="密码" autocomplete="off">
+      <div class="row" style="justify-content:flex-end; margin-top:10px">
+        <button class="small ghost" onclick="closeAuthModal()">取消</button>
+        <button class="small" onclick="submitAuth()">确认</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -204,6 +224,11 @@ async function gattConnect() {
   await dataChar.startNotifications();
   dataChar.addEventListener('characteristicvaluechanged', onData);
   log('GATT 服务就绪（LED / 文件）', 'ok');
+  // 密码认证：通过才继续，失败/取消则断开
+  if (!(await doAuth())) {
+    try { device.gatt.disconnect(); } catch (e) {}
+    return;
+  }
   $('btnDisconnect').disabled = false;
   await ping();
   await refreshList();
@@ -213,8 +238,8 @@ async function gattConnect() {
 function onDisconnected() {
   log('设备已断开连接', 'err');
   setStatus('已断开', '');
+  if (req) { const r = req; req = null; clearTimeout(r.timer); r.reject(new Error('设备已断开连接')); }
   device = null; server = null; ledChar = cmdChar = dataChar = null;
-  req = null; lineBuf = '';
   setBusy(false);
   $('fileBody').innerHTML = '';
   $('fileEmpty').style.display = 'block';
@@ -226,6 +251,47 @@ async function doDisconnect() {
   }
   onDisconnected();
 }
+
+/* ---------- 密码认证 ---------- */
+let authResolve = null;
+
+function openAuthPrompt() {
+  return new Promise(resolve => {
+    authResolve = resolve;
+    $('authPwd').value = '';
+    $('authModal').classList.add('show');
+    setTimeout(() => $('authPwd').focus(), 60);
+  });
+}
+
+function closeAuthModal() {
+  $('authModal').classList.remove('show');
+  if (authResolve) { const r = authResolve; authResolve = null; r(null); }
+}
+
+function submitAuth() {
+  const v = $('authPwd').value;
+  $('authModal').classList.remove('show');
+  if (authResolve) { const r = authResolve; authResolve = null; r(v); }
+}
+
+async function doAuth() {
+  for (let tries = 1; tries <= 3; tries++) {
+    const pwd = await openAuthPrompt();
+    if (pwd === null) { log('已取消连接（未输入密码）', 'sys'); return false; }
+    try {
+      await request('AUTH ' + pwd, () => {}, 5000);
+      log('密码验证通过，会话已解锁', 'ok');
+      return true;
+    } catch (e) {
+      log('认证失败（第 ' + tries + ' 次）: ' + e.message, 'err');
+    }
+  }
+  return false;
+}
+
+// 密码框回车提交
+$('authPwd').addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
 
 /* ---------- 通知 → 行协议 ---------- */
 function onData(ev) {

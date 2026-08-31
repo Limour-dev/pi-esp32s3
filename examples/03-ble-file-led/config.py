@@ -19,6 +19,12 @@ FILE_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 CMD_CHAR_UUID     = "0000ffe1-0000-1000-8000-00805f9b34fb"
 DATA_CHAR_UUID    = "0000ffe2-0000-1000-8000-00805f9b34fb"
 
+# ---- 蓝牙密码（应用层认证）----
+# 连接后必须先发 AUTH <password> 才能使用文件/LED 服务。
+# 注意：BLE 无配对时通道不加密，密码是明文传输，
+#       这层认证只防误连/普通围观，防不了嗅探重放。
+BLE_PASSWORD = "1234"
+
 # ---- 协议参数 ----
 CHUNK_SIZE = 180        # 每条 notify 响应行的最大字节数（含前缀）
 # 说明：BLE MTU 协商后一般为 512（Chrome/Android 均会协商到 ≥256），

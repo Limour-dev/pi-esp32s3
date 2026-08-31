@@ -80,13 +80,36 @@ VM 无蓝牙适配器，无法真机连 BLE。方案：**Node + vm 模块模拟 
 - 上板调试流程：esptool 硬复位（正确释放 DTR/RTS）→ 启动窗口内狂发 Ctrl-C 打断看门狗 → 进 REPL；或 pyserial 手动 raw REPL（Ctrl-A，不软复位）执行诊断代码。
 - 曾用 pyserial 乱 toggle DTR/RTS 把芯片带进 DOWNLOAD 模式（`boot:0x0` 卡死），esptool 硬复位可救回。
 
+### 3.8 给蓝牙加密码：应用层 AUTH 认证
+
+**动机**：BLE 广播范围内任何人都能扫到 `ESP32S3-FS` 并连上，文件（含上传/删除）和 LED 完全裸奔。
+MicroPython 的 BLE 栈不带 SMP 配对（无法走系统级 PIN 配对/加密），所以做**应用层认证**。
+
+- **协议**：新增 `AUTH <password>` 命令。连接后除 `AUTH` 外所有命令先过门禁，未认证一律回 `ERR auth required`；
+  LED 写特征（IRQ 路径）同样被忽略。密码存 `config.py` 的 `BLE_PASSWORD`（默认 `1234`）。
+- **防爆破**：连续错 `MAX_AUTH_FAILS=3` 次自动 `gap_disconnect`（先等 200ms 让错误通知发出去再断）。
+- **常量时间比较**：`_const_time_eq` 逐字节异或比较，避免长度/内容差异的时序侧信道。
+- **会话隔离**：`IRQ_CENTRAL_CONNECT` 重置 `authed=False`，每次连接都必须重新输密码；断开同样失效。
+- **网页端**：连接后弹密码框（内联暗色弹窗），失败可重试 3 次，取消则断开；回车可提交。
+
+验证（模拟 + 上板前的双通道，测试脚本已入库到 `test/`，无需真硬件可重跑）：
+
+- `test/test_auth_board.py`：板端逻辑（Python mock BLE 直测 `_drain_cmds` 真实接收路径）：未认证 `LIST` → `ERR auth required`；错密码 → `ERR auth failed (1/3)`；
+  对密码 → `AUTH OK`；认证后 `LIST`/LED 正常；第 3 次错误自动断开；新连接重置认证状态。
+- `test/test_auth_web.mjs`：网页端（Node + vm 假设备，驱动页面真实 JS）：正确密码 → 解锁 → PING/文件列表正常；错 3 次 → 断开清理；取消 → 断开。
+- 连带修复一个网页 bug：原 `onDisconnected()` 把挂起的 `req` 直接置 null 不 reject——设备在请求进行中断开时
+  Promise 永不 settle，`gattConnect` 卡死（连错密码触发服务器断开后必现）。现在断开时 reject 挂起请求。
+- **局限**：BLE 无配对时通道不加密，密码明文过空口，防不了嗅探重放；这层认证只防误连/普通围观，
+  真需要安全得上 SMP 配对或传输层加密（超出本例）。
+
 ## 4. 最终结论
 
 - BLE 广播：**ESP32S3-FS**，服务 `led=16 cmd=19 data=21`；连接/断开状态灯：暗绿=广播，蓝=已连接，用户色=LED 指令，断开恢复暗绿。
+- 密码保护：应用层 `AUTH` 认证，密码存 `config.py` 的 `BLE_PASSWORD`；未认证任何命令回 `ERR auth required`，LED 写也被忽略；连续错 3 次自动断开。
 - 文件服务：列表/查看/下载/删除/上传全通，60KB 二进制往返字节级一致；上传上限默认 512KB。
-- 网页端：单文件零依赖，HTTPS 托管即用；Chrome/Edge（桌面+Android）可用，iOS Safari 不支持。
+- 网页端：单文件零依赖，HTTPS 托管即用；连接后弹密码框（默认 `1234`）；Chrome/Edge（桌面+Android）可用，iOS Safari 不支持。
 - 板子文件：`boot.py`（看门狗）+ `config.py` + `main.py`，上电自启。
-- 遗留问题：无。实测全程未再掉线。
+- 遗留问题：无。实测全程未再掉线；密码认证为应用层保护（BLE 无配对加密），防误连足够，防嗅探重放不够。
 
 ## 5. 经验教训（重点）
 
@@ -98,3 +121,5 @@ VM 无蓝牙适配器，无法真机连 BLE。方案：**Node + vm 模块模拟 
 6. **看门狗价值大**：用户遇到崩溃时板子 3 秒自愈重新广播，不用断电重插；但调试时要记得它的存在（Ctrl-C 可跳出）。
 7. **分两次 `gatts_register_services` 句柄冲突**：必须一次注册全部服务，返回值是嵌套元组 `((led,), (cmd, data))`。
 8. **网页 request/response 引擎按 `DONE` 收尾判定**：单行回复后面必须补 `DONE`；`writeValue` 同步异常要 try/catch 并清理请求状态，否则永久「已有请求进行中」。
+9. **断开时挂起的请求必须 reject**：`onDisconnected()` 把 `req` 置 null 却不 reject，Promise 永不 settle → `await` 永远挂起、页面卡死。加密码后这条必现（连错 3 次服务器主动断开），顺手修掉：断开时 `r.reject(new Error('设备已断开连接'))`。
+10. **BLE 加密码只能做应用层**：MicroPython BLE 栈无 SMP 配对，GATT 通道不加密，`AUTH` 密码明文过空口。防误连/防普通围观够用，防嗅探重放不够；别在文档里吹成安全方案。

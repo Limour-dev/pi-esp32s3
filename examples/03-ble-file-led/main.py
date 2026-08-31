@@ -7,6 +7,8 @@
 #
 # BLE 协议（ASCII 文本行，\n 结尾，经 CMD 特征写入；响应经 DATA 特征 notify）：
 #   每条命令的响应都以 DONE 行结束（出错则 ERR 行结束，无 DONE）。
+#   连接后必须先认证：除 AUTH 外的任何命令在通过认证前都回 ERR auth required。
+#   AUTH <password>     -> AUTH OK ... DONE（错误：ERR auth failed ... 无 DONE）
 #   PING                 -> PONG <name> <version> ... DONE
 #   LIST                 -> F <name> <size> | D <name> 每项一行 ... DONE
 #   READ <name>          -> READ <name> <size> / B <base64> ... / DONE
@@ -40,6 +42,7 @@ try:
     FILE_SERVICE_UUID = config.FILE_SERVICE_UUID
     CMD_CHAR_UUID = config.CMD_CHAR_UUID
     DATA_CHAR_UUID = config.DATA_CHAR_UUID
+    BLE_PASSWORD = config.BLE_PASSWORD
     CHUNK_SIZE = config.CHUNK_SIZE
 except ImportError:
     DEVICE_NAME = "ESP32S3-FS"
@@ -50,10 +53,12 @@ except ImportError:
     FILE_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
     CMD_CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
     DATA_CHAR_UUID = "0000ffe2-0000-1000-8000-00805f9b34fb"
+    BLE_PASSWORD = "1234"
     CHUNK_SIZE = 180
 
-VERSION = "1.0"
+VERSION = "1.1"
 MAX_WRITE_SIZE = 512 * 1024  # 网页写入文件的最大字节数，防 OOM
+MAX_AUTH_FAILS = 3        # 密码连续错误次数上限，超过自动断开（防爆破）
 
 # ---------------- BLE 事件码 ----------------
 # 本固件（v1.29.0 ESP32 变体）未导出 IRQ_* 常量，按 MicroPython 官方
@@ -107,6 +112,8 @@ cmd_buf = bytearray() # 命令缓冲，按 \n 切分成一行行命令
 w_name = None         # WRITE_BEGIN 状态
 w_size = 0
 w_buf = None
+authed = False        # 是否已通过密码认证（每次连接都要重新认证）
+auth_fails = 0        # 本次连接连续输错密码次数
 
 
 def _init_ble():
@@ -153,10 +160,12 @@ def _start_advertising():
 
 # ---------------- IRQ 处理（只做轻量工作） ----------------
 def _irq(event, data):
-    global connected, conn_id, led_user, led_dirty
+    global connected, conn_id, led_user, led_dirty, authed, auth_fails
     if event == IRQ_CENTRAL_CONNECT:
         connected = True
         conn_id = data[0]
+        authed = False          # 新连接必须重新输密码
+        auth_fails = 0
         print("BLE 已连接 conn=%s" % (data[0],))
     elif event == IRQ_CENTRAL_DISCONNECT:
         connected = False
@@ -167,6 +176,8 @@ def _irq(event, data):
     elif event == IRQ_GATTS_WRITE:
         vh = data[1]
         if vh == led_handle:
+            if not authed:
+                return          # 未认证不响应 LED 写
             val = ble.gatts_read(led_handle)
             if len(val) >= 3:
                 led_user = (val[0], val[1], val[2])
@@ -190,6 +201,40 @@ def _notify(text):
         ble.gatts_notify(conn_id, data_handle, line)
     except Exception as e:
         print("notify 失败:", e)
+
+def _const_time_eq(a, b):
+    """常量时间字符串比较，避免长度/内容差异造成时序侧信道。"""
+    if len(a) != len(b):
+        return False
+    res = 0
+    for x, y in zip(a, b):
+        res |= ord(x) ^ ord(y)
+    return res == 0
+
+
+def _cmd_auth(pwd):
+    global authed, auth_fails
+    if authed:
+        _notify("AUTH OK")
+        _notify("DONE")
+        return
+    if _const_time_eq(pwd, BLE_PASSWORD):
+        authed = True
+        auth_fails = 0
+        _notify("AUTH OK")
+        _notify("DONE")
+        print("密码验证通过")
+    else:
+        auth_fails += 1
+        _notify("ERR auth failed (%d/%d)" % (auth_fails, MAX_AUTH_FAILS))
+        print("密码错误 %d/%d" % (auth_fails, MAX_AUTH_FAILS))
+        if auth_fails >= MAX_AUTH_FAILS:
+            time.sleep_ms(200)      # 等错误通知发出去再断开
+            try:
+                ble.gap_disconnect(conn_id)
+            except Exception as e:
+                print("断开失败:", e)
+
 
 def _cmd_ping():
     _notify("PONG %s %s" % (DEVICE_NAME, VERSION))
@@ -317,7 +362,13 @@ def _handle_cmd(line):
         return
     op, _, rest = line.partition(" ")
     op = op.upper().strip()
-    if op == "PING":
+    # 认证门禁：除 AUTH 外所有命令必须先通过密码认证
+    if op != "AUTH" and not authed:
+        _notify("ERR auth required")   # ERR 行结束即无 DONE（与协议约定一致）
+        return
+    if op == "AUTH":
+        _cmd_auth(rest.strip())
+    elif op == "PING":
         _cmd_ping()
     elif op == "LIST":
         _cmd_list()
@@ -364,9 +415,9 @@ def _drain_cmds():
 def main():
     global conn_id
     print("=" * 56)
-    print("ESP32-S3 例程 03：BLE 文件服务 + WS2812 LED 控制")
-    print("设备名: %s  |  版本: %s" % (DEVICE_NAME, VERSION))
-    print("用浏览器打开 web/index.html（需 HTTPS）连接本设备")
+    print("ESP32-S3 例程 03：BLE 文件服务 + WS2812 LED 控制（密码保护已开启）")
+    print("设备名: %s  |  版本: %s  |  密码: %s" % (DEVICE_NAME, VERSION, BLE_PASSWORD))
+    print("用浏览器打开 web/index.html（需 HTTPS）连接本设备，连接后先输密码")
     print("=" * 56)
     _init_ble()
     _start_advertising()
